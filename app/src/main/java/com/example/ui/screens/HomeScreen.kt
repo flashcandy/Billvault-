@@ -105,7 +105,7 @@ fun HomeScreen(
         ) {
             // Header with stats
             NothingHeader(
-                title = "BILL VALID",
+                title = "BILL VAULT",
                 subtitle = "$activeCount Active • $expiringSoonCount Expiring Soon"
             )
 

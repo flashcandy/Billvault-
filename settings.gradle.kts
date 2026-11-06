@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "Bill Valid"
+rootProject.name = "Bill Vault"
 
 include(":app")

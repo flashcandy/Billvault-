@@ -1,5 +1,5 @@
 {
-  "name": "Bill Valid",
+  "name": "Bill Vault",
   "description": "Store purchase invoices, extract key details with AI, and track warranty & protection plan expiries with Nothing OS design.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

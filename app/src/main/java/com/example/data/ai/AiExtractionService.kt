@@ -311,8 +311,8 @@ class AiExtractionService(
             val request = Request.Builder()
                 .url(url)
                 .header("Authorization", "Bearer $apiKey")
-                .header("HTTP-Referer", "https://billvalid.app")
-                .header("X-Title", "Bill Valid")
+                .header("HTTP-Referer", "https://billvault.app")
+                .header("X-Title", "Bill Vault")
                 .post(jsonPayload.toString().toRequestBody("application/json".toMediaType()))
                 .build()
 
