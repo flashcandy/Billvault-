@@ -2,7 +2,6 @@ package com.example.ui.navigation
 
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,10 +23,8 @@ import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -42,12 +39,10 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
-import com.example.data.ai.ExtractedInvoiceResult
 import com.example.ui.screens.AddInvoiceScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.InvoiceDetailScreen
 import com.example.ui.screens.RemindersTimelineScreen
-import com.example.ui.screens.ReviewInvoiceScreen
 import com.example.ui.screens.SettingsScreen
 import com.example.ui.theme.DotoFontFamily
 import com.example.ui.theme.NothingRed
@@ -58,9 +53,10 @@ object Routes {
     const val TIMELINE = "timeline"
     const val SETTINGS = "settings"
     const val ADD = "add"
-    const val REVIEW = "review"
+    const val EDIT = "edit/{id}"
     const val DETAIL = "detail/{id}"
 
+    fun editRoute(id: Long) = "edit/$id"
     fun detailRoute(id: Long) = "detail/$id"
 }
 
@@ -73,7 +69,7 @@ data class BottomNavItem(
 )
 
 val bottomNavItems = listOf(
-    BottomNavItem(Routes.HOME, "INVOICES", Icons.Filled.Receipt, Icons.Outlined.Receipt, "nav_home"),
+    BottomNavItem(Routes.HOME, "BILLS", Icons.Filled.Receipt, Icons.Outlined.Receipt, "nav_home"),
     BottomNavItem(Routes.TIMELINE, "TIMELINE", Icons.Filled.Notifications, Icons.Outlined.Notifications, "nav_timeline"),
     BottomNavItem(Routes.SETTINGS, "SETTINGS", Icons.Filled.Settings, Icons.Outlined.Settings, "nav_settings")
 )
@@ -81,13 +77,18 @@ val bottomNavItems = listOf(
 @Composable
 fun MainNavGraph(
     viewModel: MainViewModel,
+    initialItemId: Long? = null,
     onThemeChanged: (String) -> Unit,
     navController: NavHostController = rememberNavController()
 ) {
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
 
-    var pendingReviewData by remember { mutableStateOf<ExtractedInvoiceResult?>(null) }
+    LaunchedEffect(initialItemId) {
+        if (initialItemId != null && initialItemId > 0L) {
+            navController.navigate(Routes.detailRoute(initialItemId))
+        }
+    }
 
     val isBottomBarVisible = currentRoute in listOf(Routes.HOME, Routes.TIMELINE, Routes.SETTINGS)
 
@@ -164,15 +165,15 @@ fun MainNavGraph(
                 composable(Routes.HOME) {
                     HomeScreen(
                         viewModel = viewModel,
-                        onAddInvoiceClick = { navController.navigate(Routes.ADD) },
-                        onInvoiceClick = { id -> navController.navigate(Routes.detailRoute(id)) }
+                        onAddItemClick = { navController.navigate(Routes.ADD) },
+                        onItemClick = { id -> navController.navigate(Routes.detailRoute(id)) }
                     )
                 }
 
                 composable(Routes.TIMELINE) {
                     RemindersTimelineScreen(
                         viewModel = viewModel,
-                        onItemClick = { invoiceId -> navController.navigate(Routes.detailRoute(invoiceId)) }
+                        onItemClick = { itemId -> navController.navigate(Routes.detailRoute(itemId)) }
                     )
                 }
 
@@ -186,24 +187,28 @@ fun MainNavGraph(
                 composable(Routes.ADD) {
                     AddInvoiceScreen(
                         viewModel = viewModel,
-                        onNavigateToReview = { result ->
-                            pendingReviewData = result
-                            navController.navigate(Routes.REVIEW)
+                        editItemId = null,
+                        onSaved = { itemId ->
+                            navController.navigate(Routes.detailRoute(itemId)) {
+                                popUpTo(Routes.HOME)
+                            }
                         },
-                        onBack = { navController.popBackStack() }
+                        onCancel = { navController.popBackStack() }
                     )
                 }
 
-                composable(Routes.REVIEW) {
-                    val result = pendingReviewData ?: ExtractedInvoiceResult()
-                    ReviewInvoiceScreen(
-                        extractedResult = result,
+                composable(
+                    route = Routes.EDIT,
+                    arguments = listOf(navArgument("id") { type = NavType.LongType })
+                ) { backStackEntry ->
+                    val id = backStackEntry.arguments?.getLong("id") ?: 0L
+                    AddInvoiceScreen(
                         viewModel = viewModel,
-                        onSaved = { invoiceId ->
-                            navController.navigate(Routes.detailRoute(invoiceId)) {
-                                popUpTo(Routes.HOME)
-                            }
-                        }
+                        editItemId = id,
+                        onSaved = { savedId ->
+                            navController.popBackStack()
+                        },
+                        onCancel = { navController.popBackStack() }
                     )
                 }
 
@@ -213,8 +218,9 @@ fun MainNavGraph(
                 ) { backStackEntry ->
                     val id = backStackEntry.arguments?.getLong("id") ?: 0L
                     InvoiceDetailScreen(
-                        invoiceId = id,
+                        itemId = id,
                         viewModel = viewModel,
+                        onEditItem = { editId -> navController.navigate(Routes.editRoute(editId)) },
                         onBack = { navController.popBackStack() }
                     )
                 }

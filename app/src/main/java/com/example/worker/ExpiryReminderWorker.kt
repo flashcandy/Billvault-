@@ -21,22 +21,23 @@ class ExpiryReminderWorker(
     override suspend fun doWork(): Result {
         val database = AppDatabase.getDatabase(context)
         val reminderDao = database.reminderDao()
-        val itemDao = database.invoiceItemDao()
+        val itemDao = database.itemDao()
 
         val now = System.currentTimeMillis()
         val dueReminders = reminderDao.getDueReminders(now)
 
         for (reminder in dueReminders) {
             val item = itemDao.getItemById(reminder.itemId) ?: continue
+            val expiryDate = item.expiryDate ?: continue
 
-            val daysRemaining = DateUtils.getDaysRemaining(item.warrantyEndDate)
+            val daysRemaining = DateUtils.getDaysRemaining(expiryDate) ?: 0L
             val title = when {
-                daysRemaining <= 0 -> "Warranty Expired: ${item.productName}"
-                daysRemaining == 1L -> "Warranty Expires Tomorrow: ${item.productName}"
-                else -> "Warranty Expiring in $daysRemaining Days: ${item.productName}"
+                daysRemaining <= 0L -> "Warranty Expired: ${item.title}"
+                daysRemaining == 1L -> "Warranty Expires Tomorrow: ${item.title}"
+                else -> "Warranty Expiring in $daysRemaining Days: ${item.title}"
             }
 
-            val body = "Protection plan for ${item.productName} (S/N: ${item.serialNumber.ifBlank { "N/A" }}) ends on ${DateUtils.formatDate(item.warrantyEndDate)}."
+            val body = "Protection plan / warranty for ${item.title} (${item.sellerName.ifBlank { "Store" }}) ends on ${DateUtils.formatDate(expiryDate)}."
 
             sendNotification(reminder.id.toInt(), item.id, title, body)
             reminderDao.markReminderSent(reminder.id)

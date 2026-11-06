@@ -29,12 +29,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.data.model.InvoiceItem
+import com.example.data.model.Item
 import com.example.ui.components.NothingDivider
 import com.example.ui.components.NothingHeader
 import com.example.ui.components.NothingStatusDot
@@ -52,8 +51,8 @@ fun RemindersTimelineScreen(
     val items by viewModel.allItems.collectAsStateWithLifecycle()
 
     val sortedItems = items
-        .filter { it.warrantyMonths > 0 }
-        .sortedBy { it.warrantyEndDate }
+        .filter { it.expiryDate != null && it.expiryDate > 0L }
+        .sortedBy { it.expiryDate }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background
@@ -102,7 +101,7 @@ fun RemindersTimelineScreen(
                     items(sortedItems, key = { it.id }) { item ->
                         ReminderTimelineCard(
                             item = item,
-                            onClick = { onItemClick(item.invoiceId) }
+                            onClick = { onItemClick(item.id) }
                         )
                     }
                 }
@@ -113,11 +112,11 @@ fun RemindersTimelineScreen(
 
 @Composable
 fun ReminderTimelineCard(
-    item: InvoiceItem,
+    item: Item,
     onClick: () -> Unit
 ) {
-    val status = DateUtils.getExpiryStatus(item.warrantyEndDate)
-    val daysRemaining = DateUtils.getDaysRemaining(item.warrantyEndDate)
+    val status = DateUtils.getExpiryStatus(item.expiryDate)
+    val daysRemaining = DateUtils.getDaysRemaining(item.expiryDate) ?: 0L
 
     Box(
         modifier = Modifier
@@ -136,7 +135,7 @@ fun ReminderTimelineCard(
                 NothingStatusDot(status = status, modifier = Modifier.padding(end = 8.dp))
 
                 Text(
-                    text = item.productName,
+                    text = item.title,
                     style = MaterialTheme.typography.titleMedium.copy(
                         fontFamily = SpaceGroteskFontFamily,
                         fontWeight = FontWeight.Bold
@@ -146,7 +145,7 @@ fun ReminderTimelineCard(
                 )
 
                 val badgeText = when {
-                    daysRemaining < 0 -> "EXPIRED"
+                    daysRemaining < 0L -> "EXPIRED"
                     daysRemaining == 0L -> "EXPIRES TODAY"
                     else -> "${daysRemaining}d LEFT"
                 }
@@ -158,26 +157,25 @@ fun ReminderTimelineCard(
                         fontWeight = FontWeight.Bold,
                         letterSpacing = 1.2.sp
                     ),
-                    color = if (daysRemaining <= 30) NothingRed else MaterialTheme.colorScheme.onBackground
+                    color = if (daysRemaining <= 30L) NothingRed else MaterialTheme.colorScheme.onBackground
                 )
             }
 
             Text(
-                text = "EXPIRY DATE: ${DateUtils.formatDate(item.warrantyEndDate)}",
+                text = "EXPIRY DATE: ${DateUtils.formatDate(item.expiryDate)}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
 
             NothingDivider(modifier = Modifier.padding(vertical = 4.dp))
 
-            // Reminder Trigger Milestones
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                MilestoneChip(label = "30 DAYS ALERT", isActive = daysRemaining <= 30)
-                MilestoneChip(label = "7 DAYS ALERT", isActive = daysRemaining <= 7)
-                MilestoneChip(label = "1 DAY ALERT", isActive = daysRemaining <= 1)
+                MilestoneChip(label = "30 DAYS ALERT", isActive = daysRemaining <= 30L)
+                MilestoneChip(label = "7 DAYS ALERT", isActive = daysRemaining <= 7L)
+                MilestoneChip(label = "1 DAY ALERT", isActive = daysRemaining <= 1L)
             }
         }
     }

@@ -1,150 +1,240 @@
 package com.example
 
 import android.content.Context
+import androidx.sqlite.db.SupportSQLiteDatabase
+import androidx.sqlite.db.SupportSQLiteOpenHelper
+import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
-import com.example.data.ai.AiExtractionService
-import com.example.data.preferences.SettingsManager
+import com.example.data.local.AppDatabase
+import com.example.data.model.WarrantyUnit
 import com.example.utils.DateUtils
+import com.example.utils.ValidationResult
+import com.example.utils.ValidationUtils
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
-import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import java.util.Calendar
+import java.time.ZoneId
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
 class BillValidUnitTest {
 
-    private lateinit var aiExtractionService: AiExtractionService
-    private lateinit var settingsManager: SettingsManager
+    private val testZone = ZoneId.of("UTC")
 
-    @Before
-    fun setUp() {
+    @Test
+    fun `expiry calculation supports days months and years`() {
+        val startMillis = DateUtils.localDateToMillis(2025, 3, 15, testZone)
+
+        // +30 DAYS -> 2025-04-14
+        val plus30Days = DateUtils.calculateExpiryDate(startMillis, 30, WarrantyUnit.DAYS, testZone)
+        assertNotNull(plus30Days)
+        assertEquals(
+            DateUtils.localDateToMillis(2025, 4, 14, testZone),
+            plus30Days
+        )
+
+        // +6 MONTHS -> 2025-09-15
+        val plus6Months = DateUtils.calculateExpiryDate(startMillis, 6, WarrantyUnit.MONTHS, testZone)
+        assertNotNull(plus6Months)
+        assertEquals(
+            DateUtils.localDateToMillis(2025, 9, 15, testZone),
+            plus6Months
+        )
+
+        // +2 YEARS -> 2027-03-15
+        val plus2Years = DateUtils.calculateExpiryDate(startMillis, 2, WarrantyUnit.YEARS, testZone)
+        assertNotNull(plus2Years)
+        assertEquals(
+            DateUtils.localDateToMillis(2027, 3, 15, testZone),
+            plus2Years
+        )
+    }
+
+    @Test
+    fun `expiry calculation handles January 31 plus one month edge cases`() {
+        // Non-leap year: Jan 31, 2025 + 1 month -> Feb 28, 2025
+        val jan31NonLeap = DateUtils.localDateToMillis(2025, 1, 31, testZone)
+        val feb28NonLeap = DateUtils.calculateExpiryDate(jan31NonLeap, 1, WarrantyUnit.MONTHS, testZone)
+        assertEquals(
+            DateUtils.localDateToMillis(2025, 2, 28, testZone),
+            feb28NonLeap
+        )
+
+        // Leap year: Jan 31, 2024 + 1 month -> Feb 29, 2024
+        val jan31Leap = DateUtils.localDateToMillis(2024, 1, 31, testZone)
+        val feb29Leap = DateUtils.calculateExpiryDate(jan31Leap, 1, WarrantyUnit.MONTHS, testZone)
+        assertEquals(
+            DateUtils.localDateToMillis(2024, 2, 29, testZone),
+            feb29Leap
+        )
+
+        // No warranty entered -> null expiry and empty reminders
+        assertNull(DateUtils.calculateExpiryDate(jan31NonLeap, null, WarrantyUnit.MONTHS, testZone))
+        assertNull(DateUtils.calculateExpiryDate(jan31NonLeap, 0, WarrantyUnit.MONTHS, testZone))
+        assertTrue(DateUtils.calculateReminderDates(null).isEmpty())
+    }
+
+    @Test
+    fun `filename sanitization strips unsafe characters and generates unique names`() {
+        val raw = "../../Washing Machine: Bill*2026?.pdf"
+        val sanitized = ValidationUtils.sanitizeFileName(raw)
+        assertEquals("Washing_Machine_Bill_2026.pdf", sanitized)
+
+        val unique = ValidationUtils.generateUniqueFileName(raw, "1001")
+        assertEquals("Washing_Machine_Bill_2026_1001.pdf", unique)
+
+        val emptyFallback = ValidationUtils.sanitizeFileName("///")
+        assertEquals("attachment", emptyFallback)
+    }
+
+    @Test
+    fun `category name validation checks required length limit and uniqueness`() {
+        val existing = listOf("VEHICLE", "ELECTRONICS", "SHOPPING", "ELECTRIC BILLS")
+
+        // Blank fails
+        val blankRes = ValidationUtils.validateCategoryName("   ", existing)
+        assertTrue(blankRes is ValidationResult.Invalid)
+
+        // > 20 chars fails
+        val tooLongRes = ValidationUtils.validateCategoryName("ABCDEFGHIJKLMNOPQRSTU", existing)
+        assertTrue(tooLongRes is ValidationResult.Invalid)
+
+        // Duplicate (case-insensitive) fails
+        val dupRes = ValidationUtils.validateCategoryName("electronics", existing)
+        assertTrue(dupRes is ValidationResult.Invalid)
+
+        // Valid new category succeeds
+        val validRes = ValidationUtils.validateCategoryName("APPLIANCES", existing)
+        assertTrue(validRes is ValidationResult.Valid)
+        assertEquals("APPLIANCES", (validRes as ValidationResult.Valid).cleanedValue)
+
+        // Renaming existing category to its own name succeeds
+        val selfRename = ValidationUtils.validateCategoryName("Electronics", existing, currentName = "ELECTRONICS")
+        assertTrue(selfRename is ValidationResult.Valid)
+    }
+
+    @Test
+    fun `room migration 1 to 2 preserves existing invoices items and reminders`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
-        settingsManager = SettingsManager(context)
-        aiExtractionService = AiExtractionService(context, settingsManager)
-    }
+        val dbName = "migration_test_v1_to_v2.db"
+        context.deleteDatabase(dbName)
 
-    @Test
-    fun `test warranty end date calculation`() {
-        // Oct 24, 2024
-        val cal = Calendar.getInstance().apply {
-            set(2024, Calendar.OCTOBER, 24, 0, 0, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
-        val startDateMillis = cal.timeInMillis
-
-        // Add 12 months
-        val endDateMillis = DateUtils.calculateWarrantyEndDate(startDateMillis, 12)
-
-        val endCal = Calendar.getInstance().apply {
-            timeInMillis = endDateMillis
-        }
-
-        assertEquals(2025, endCal.get(Calendar.YEAR))
-        assertEquals(Calendar.OCTOBER, endCal.get(Calendar.MONTH))
-        assertEquals(24, endCal.get(Calendar.DAY_OF_MONTH))
-    }
-
-    @Test
-    fun `test reminder dates calculation`() {
-        val cal = Calendar.getInstance().apply {
-            set(2025, Calendar.OCTOBER, 24, 0, 0, 0)
-            set(Calendar.MILLISECOND, 0)
-        }
-        val endDateMillis = cal.timeInMillis
-
-        val reminders = DateUtils.calculateReminderDates(endDateMillis)
-
-        assertEquals(3, reminders.size)
-        val (days30, date30) = reminders[0]
-        val (days7, date7) = reminders[1]
-        val (days1, date1) = reminders[2]
-
-        assertEquals(30, days30)
-        assertEquals(7, days7)
-        assertEquals(1, days1)
-
-        assertTrue(date30 < date7)
-        assertTrue(date7 < date1)
-        assertTrue(date1 < endDateMillis)
-    }
-
-    @Test
-    fun `test json validator with markdown code fence`() {
-        val rawAiResponse = """
-            ```json
-            {
-              "sellerName": "Flipkart Internet Pvt Ltd",
-              "invoiceNumber": "FK-IN-2024-88492",
-              "orderId": "OD309485720194820",
-              "invoiceDate": "2024-10-24",
-              "totalAmount": 18999.0,
-              "taxAmount": 2898.15,
-              "items": [
-                {
-                  "productName": "Nothing Phone (2a) 5G (8GB/128GB)",
-                  "serialNumber": "NP2A884920194",
-                  "quantity": 1,
-                  "amount": 18999.0,
-                  "warrantyMonths": 12,
-                  "notes": "Brand warranty included"
+        val config = SupportSQLiteOpenHelper.Configuration.builder(context)
+            .name(dbName)
+            .callback(object : SupportSQLiteOpenHelper.Callback(1) {
+                override fun onCreate(db: SupportSQLiteDatabase) {
+                    db.execSQL(
+                        """
+                        CREATE TABLE IF NOT EXISTS `invoices` (
+                            `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                            `sellerName` TEXT NOT NULL,
+                            `invoiceNumber` TEXT NOT NULL,
+                            `orderId` TEXT NOT NULL,
+                            `invoiceDate` INTEGER NOT NULL,
+                            `totalAmount` REAL NOT NULL,
+                            `taxAmount` REAL NOT NULL,
+                            `sourceFilePath` TEXT,
+                            `sourceType` TEXT NOT NULL,
+                            `createdAt` INTEGER NOT NULL
+                        )
+                        """.trimIndent()
+                    )
+                    db.execSQL(
+                        """
+                        CREATE TABLE IF NOT EXISTS `invoice_items` (
+                            `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                            `invoiceId` INTEGER NOT NULL,
+                            `productName` TEXT NOT NULL,
+                            `serialNumber` TEXT NOT NULL,
+                            `quantity` INTEGER NOT NULL,
+                            `amount` REAL NOT NULL,
+                            `warrantyMonths` INTEGER NOT NULL,
+                            `warrantyStartDate` INTEGER NOT NULL,
+                            `warrantyEndDate` INTEGER NOT NULL,
+                            `notes` TEXT NOT NULL,
+                            FOREIGN KEY(`invoiceId`) REFERENCES `invoices`(`id`) ON DELETE CASCADE
+                        )
+                        """.trimIndent()
+                    )
+                    db.execSQL(
+                        """
+                        CREATE TABLE IF NOT EXISTS `reminders` (
+                            `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                            `itemId` INTEGER NOT NULL,
+                            `reminderDate` INTEGER NOT NULL,
+                            `daysBefore` INTEGER NOT NULL,
+                            `isSent` INTEGER NOT NULL,
+                            FOREIGN KEY(`itemId`) REFERENCES `invoice_items`(`id`) ON DELETE CASCADE
+                        )
+                        """.trimIndent()
+                    )
                 }
-              ]
-            }
-            ```
-        """.trimIndent()
 
-        val parsed = aiExtractionService.validateAndParseJson(rawAiResponse)
+                override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+            })
+            .build()
 
-        assertNotNull(parsed)
-        assertEquals("Flipkart Internet Pvt Ltd", parsed?.sellerName)
-        assertEquals("FK-IN-2024-88492", parsed?.invoiceNumber)
-        assertEquals("OD309485720194820", parsed?.orderId)
-        assertEquals("2024-10-24", parsed?.invoiceDate)
-        assertEquals(18999.0, parsed?.totalAmount ?: 0.0, 0.01)
-        assertEquals(2898.15, parsed?.taxAmount ?: 0.0, 0.01)
+        val helper = FrameworkSQLiteOpenHelperFactory().create(config)
+        val db = helper.writableDatabase
 
-        assertEquals(1, parsed?.items?.size)
-        val item = parsed?.items?.get(0)
-        assertEquals("Nothing Phone (2a) 5G (8GB/128GB)", item?.productName)
-        assertEquals("NP2A884920194", item?.serialNumber)
-        assertEquals(12, item?.warrantyMonths)
-    }
+        // Insert v1 test data
+        db.execSQL(
+            """
+            INSERT INTO `invoices` (`id`, `sellerName`, `invoiceNumber`, `orderId`, `invoiceDate`, `totalAmount`, `taxAmount`, `sourceFilePath`, `sourceType`, `createdAt`)
+            VALUES (10, 'Flipkart', 'FK-999', 'OD-123', 1700000000000, 24999.0, 3800.0, NULL, 'PDF', 1700000000000)
+            """.trimIndent()
+        )
+        db.execSQL(
+            """
+            INSERT INTO `invoice_items` (`id`, `invoiceId`, `productName`, `serialNumber`, `quantity`, `amount`, `warrantyMonths`, `warrantyStartDate`, `warrantyEndDate`, `notes`)
+            VALUES (20, 10, 'Washing Machine', 'SN-WM-777', 1, 24999.0, 12, 1700000000000, 1731536000000, 'Migrated note')
+            """.trimIndent()
+        )
+        db.execSQL(
+            """
+            INSERT INTO `reminders` (`id`, `itemId`, `reminderDate`, `daysBefore`, `isSent`)
+            VALUES (30, 20, 1728944000000, 30, 0)
+            """.trimIndent()
+        )
 
-    @Test
-    fun `test sample Flipkart invoice text rule parser`() {
-        val flipkartInvoiceText = """
-            Tax Invoice / Bill of Supply
-            Flipkart Internet Pvt Ltd
-            Buildings Alyssa, Begonia & Clover, Embassy Tech Village
-            Outer Ring Road, Devarabeesanahalli Village, Bengaluru, 560103, Karnataka, India
-            
-            Invoice Number: FK-IN-2024-88492
-            Order ID: OD309485720194820
-            Invoice Date: 24/10/2024
-            
-            Description: Nothing Phone (2a) 5G
-            Qty: 1
-            Gross Amount: ₹16,100.85
-            IGST (18%): ₹2,898.15
-            Total Amount Paid: ₹18,999.00
-            
-            1 Year Warranty on handset and 6 Months Warranty on accessories.
-        """.trimIndent()
+        // Run MIGRATION_1_2
+        AppDatabase.MIGRATION_1_2.migrate(db)
 
-        val parsed = aiExtractionService.parseInvoiceWithRules(flipkartInvoiceText)
+        // 1. Verify default categories were created
+        db.query("SELECT COUNT(*) FROM `categories` WHERE `isDefault` = 1").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(4, cursor.getInt(0))
+        }
 
-        assertEquals("Flipkart Internet Pvt Ltd", parsed.sellerName)
-        assertEquals("FK-IN-2024-88492", parsed.invoiceNumber)
-        assertEquals("OD309485720194820", parsed.orderId)
-        assertEquals(18999.00, parsed.totalAmount, 0.01)
-        assertEquals(2898.15, parsed.taxAmount, 0.01)
-        assertTrue(parsed.items.isNotEmpty())
-        assertEquals(12, parsed.items[0].warrantyMonths)
+        // 2. Verify migrated item in `items`
+        db.query("SELECT `title`, `sellerName`, `invoiceNumber`, `warrantyValue`, `warrantyUnit` FROM `items` WHERE `id` = 20").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Washing Machine", cursor.getString(0))
+            assertEquals("Flipkart", cursor.getString(1))
+            assertEquals("FK-999", cursor.getString(2))
+            assertEquals(12, cursor.getInt(3))
+            assertEquals("MONTHS", cursor.getString(4))
+        }
+
+        // 3. Verify serialNumber migrated into `custom_fields`
+        db.query("SELECT `name`, `value` FROM `custom_fields` WHERE `itemId` = 20").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Serial Number", cursor.getString(0))
+            assertEquals("SN-WM-777", cursor.getString(1))
+        }
+
+        // 4. Verify reminder was preserved
+        db.query("SELECT `daysBefore` FROM `reminders` WHERE `itemId` = 20").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(30, cursor.getInt(0))
+        }
+
+        db.close()
+        context.deleteDatabase(dbName)
     }
 }

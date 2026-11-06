@@ -8,7 +8,6 @@ import android.os.Build
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
-import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.example.worker.ExpiryReminderWorker
 import java.util.concurrent.TimeUnit
 
@@ -16,17 +15,7 @@ class BillValidApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-        try {
-            // Initialize PdfBox Android
-            PDFBoxResourceLoader.init(applicationContext)
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
-        // Create Notification Channel for Warranty Reminders
         createNotificationChannel()
-
-        // Schedule Daily Expiry Check Worker
         scheduleDailyExpiryWorker()
     }
 

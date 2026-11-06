@@ -1,180 +1,358 @@
 package com.example.data.repository
 
-import com.example.data.local.InvoiceDao
-import com.example.data.local.InvoiceItemDao
+import android.content.Context
+import com.example.data.local.AttachmentDao
+import com.example.data.local.CategoryDao
+import com.example.data.local.CustomFieldDao
+import com.example.data.local.ItemDao
 import com.example.data.local.ReminderDao
-import com.example.data.model.Invoice
-import com.example.data.model.InvoiceItem
-import com.example.data.model.InvoiceWithItems
+import com.example.data.model.Attachment
+import com.example.data.model.Category
+import com.example.data.model.CategoryMarker
+import com.example.data.model.CustomField
+import com.example.data.model.CustomFieldTemplate
+import com.example.data.model.CustomFieldType
+import com.example.data.model.Item
+import com.example.data.model.ItemWithDetails
 import com.example.data.model.Reminder
+import com.example.data.model.WarrantyUnit
+import com.example.data.preferences.SettingsManager
 import com.example.utils.DateUtils
+import com.example.utils.FileStorageHelper
+import com.example.utils.PendingAttachment
+import com.example.utils.ValidationResult
+import com.example.utils.ValidationUtils
 import kotlinx.coroutines.flow.Flow
 import java.util.concurrent.TimeUnit
 
 class InvoiceRepository(
-    private val invoiceDao: InvoiceDao,
-    private val invoiceItemDao: InvoiceItemDao,
+    private val categoryDao: CategoryDao,
+    private val itemDao: ItemDao,
+    private val customFieldDao: CustomFieldDao,
+    private val attachmentDao: AttachmentDao,
     private val reminderDao: ReminderDao
 ) {
 
-    val allInvoicesWithItems: Flow<List<InvoiceWithItems>> = invoiceDao.getAllInvoicesWithItems()
+    val allCategories: Flow<List<Category>> = categoryDao.getAllCategories()
+    val allItemsWithDetails: Flow<List<ItemWithDetails>> = itemDao.getAllItemsWithDetails()
+    val allItems: Flow<List<Item>> = itemDao.getAllItems()
     val pendingReminders: Flow<List<Reminder>> = reminderDao.getPendingReminders()
-    val allItems: Flow<List<InvoiceItem>> = invoiceItemDao.getAllItems()
 
-    fun getInvoiceWithItemsById(id: Long): Flow<InvoiceWithItems?> =
-        invoiceDao.getInvoiceWithItemsById(id)
+    fun getItemWithDetailsById(id: Long): Flow<ItemWithDetails?> =
+        itemDao.getItemWithDetailsById(id)
 
-    suspend fun getInvoiceById(id: Long): Invoice? = invoiceDao.getInvoiceById(id)
+    suspend fun getItemWithDetailsByIdOnce(id: Long): ItemWithDetails? =
+        itemDao.getItemWithDetailsByIdOnce(id)
 
-    suspend fun getItemById(id: Long): InvoiceItem? = invoiceItemDao.getItemById(id)
+    suspend fun getItemById(id: Long): Item? = itemDao.getItemById(id)
 
-    suspend fun saveInvoiceWithItems(
-        invoice: Invoice,
-        items: List<InvoiceItem>
-    ): Long {
-        val invoiceId = invoiceDao.insertInvoice(invoice)
+    fun getTemplatesForCategory(categoryId: Long): Flow<List<CustomFieldTemplate>> =
+        customFieldDao.getTemplatesForCategory(categoryId)
 
-        for (rawItem in items) {
-            val startDate = if (rawItem.warrantyStartDate > 0) rawItem.warrantyStartDate else invoice.invoiceDate
-            val endDate = if (rawItem.warrantyMonths > 0) {
-                DateUtils.calculateWarrantyEndDate(startDate, rawItem.warrantyMonths)
-            } else {
-                startDate
-            }
-
-            val itemToSave = rawItem.copy(
-                invoiceId = invoiceId,
-                warrantyStartDate = startDate,
-                warrantyEndDate = endDate
-            )
-
-            val itemId = invoiceItemDao.insertItem(itemToSave)
-
-            // Schedule reminders if warranty is present
-            if (rawItem.warrantyMonths > 0) {
-                reminderDao.deleteRemindersForItem(itemId)
-                val reminderPairs = DateUtils.calculateReminderDates(endDate)
-                val now = System.currentTimeMillis()
-
-                for ((daysBefore, reminderDate) in reminderPairs) {
-                    val isAlreadySent = reminderDate < now
-                    val reminder = Reminder(
-                        itemId = itemId,
-                        reminderDate = reminderDate,
-                        daysBefore = daysBefore,
-                        isSent = isAlreadySent
-                    )
-                    reminderDao.insertReminder(reminder)
-                }
-            }
-        }
-
-        return invoiceId
-    }
-
-    suspend fun updateInvoiceItem(item: InvoiceItem) {
-        val endDate = if (item.warrantyMonths > 0) {
-            DateUtils.calculateWarrantyEndDate(item.warrantyStartDate, item.warrantyMonths)
-        } else {
-            item.warrantyStartDate
-        }
-
-        val updatedItem = item.copy(warrantyEndDate = endDate)
-        invoiceItemDao.updateItem(updatedItem)
-
-        // Re-schedule reminders
-        reminderDao.deleteRemindersForItem(updatedItem.id)
-        if (updatedItem.warrantyMonths > 0) {
-            val reminderPairs = DateUtils.calculateReminderDates(endDate)
-            val now = System.currentTimeMillis()
-
-            for ((daysBefore, reminderDate) in reminderPairs) {
-                val isAlreadySent = reminderDate < now
-                val reminder = Reminder(
-                    itemId = updatedItem.id,
-                    reminderDate = reminderDate,
-                    daysBefore = daysBefore,
-                    isSent = isAlreadySent
+    suspend fun saveCustomFieldTemplate(categoryId: Long, name: String, type: String) {
+        val trimmed = name.trim()
+        if (trimmed.isNotEmpty()) {
+            customFieldDao.insertTemplate(
+                CustomFieldTemplate(
+                    categoryId = categoryId,
+                    name = trimmed,
+                    type = type
                 )
-                reminderDao.insertReminder(reminder)
+            )
+        }
+    }
+
+    suspend fun ensureDefaultCategories(): List<Category> {
+        val existing = categoryDao.getAllCategoriesList()
+        if (existing.isNotEmpty()) return existing
+
+        val defaults = listOf(
+            Category(name = "VEHICLE", isDefault = true, colorMarker = CategoryMarker.DOT_RED, sortOrder = 0),
+            Category(name = "ELECTRONICS", isDefault = true, colorMarker = CategoryMarker.DOT_WHITE, sortOrder = 1),
+            Category(name = "SHOPPING", isDefault = true, colorMarker = CategoryMarker.DOT_GRAY, sortOrder = 2),
+            Category(name = "ELECTRIC BILLS", isDefault = true, colorMarker = CategoryMarker.SQUARE_RED, sortOrder = 3)
+        )
+        categoryDao.insertCategoriesIgnore(defaults)
+        return categoryDao.getAllCategoriesList()
+    }
+
+    suspend fun createCategory(rawName: String, colorMarker: String): Result<Category> {
+        val existing = categoryDao.getAllCategoriesList()
+        val validation = ValidationUtils.validateCategoryName(
+            rawName = rawName,
+            existingNames = existing.map { it.name }
+        )
+        return when (validation) {
+            is ValidationResult.Invalid -> Result.failure(IllegalArgumentException(validation.errorMessage))
+            is ValidationResult.Valid -> {
+                val nextSortOrder = (existing.maxOfOrNull { it.sortOrder } ?: 0) + 1
+                val newCategory = Category(
+                    name = validation.cleanedValue,
+                    isDefault = false,
+                    colorMarker = colorMarker,
+                    sortOrder = nextSortOrder
+                )
+                val id = categoryDao.insertCategory(newCategory)
+                Result.success(newCategory.copy(id = id))
             }
         }
     }
 
-    suspend fun deleteInvoice(invoiceId: Long) {
-        invoiceDao.deleteInvoiceById(invoiceId)
+    suspend fun renameCategory(
+        category: Category,
+        newRawName: String,
+        newColorMarker: String = category.colorMarker
+    ): Result<Category> {
+        val existing = categoryDao.getAllCategoriesList()
+        val validation = ValidationUtils.validateCategoryName(
+            rawName = newRawName,
+            existingNames = existing.map { it.name },
+            currentName = category.name
+        )
+        return when (validation) {
+            is ValidationResult.Invalid -> Result.failure(IllegalArgumentException(validation.errorMessage))
+            is ValidationResult.Valid -> {
+                val updated = category.copy(
+                    name = validation.cleanedValue,
+                    colorMarker = newColorMarker
+                )
+                categoryDao.updateCategory(updated)
+                Result.success(updated)
+            }
+        }
+    }
+
+    /**
+     * Deletes a custom category (default categories cannot be deleted) and moves its items to "UNCATEGORIZED".
+     */
+    suspend fun deleteCustomCategory(category: Category): Result<Category> {
+        if (category.isDefault) {
+            return Result.failure(IllegalStateException("Default categories cannot be deleted"))
+        }
+
+        // Find or create UNCATEGORIZED
+        var uncategorized = categoryDao.getCategoryByName("UNCATEGORIZED")
+        if (uncategorized == null) {
+            val existing = categoryDao.getAllCategoriesList()
+            val nextOrder = (existing.maxOfOrNull { it.sortOrder } ?: 0) + 1
+            val uncat = Category(
+                name = "UNCATEGORIZED",
+                isDefault = true,
+                colorMarker = CategoryMarker.DOT_GRAY,
+                sortOrder = nextOrder
+            )
+            val id = categoryDao.insertCategory(uncat)
+            uncategorized = uncat.copy(id = id)
+        }
+
+        itemDao.moveItemsToCategory(oldCategoryId = category.id, newCategoryId = uncategorized.id)
+        categoryDao.deleteCategoryById(category.id)
+        return Result.success(uncategorized)
+    }
+
+    /**
+     * Saves or updates an Item along with its CustomFields, Attachments, and Reminders.
+     */
+    suspend fun saveOrUpdateItem(
+        context: Context,
+        settingsManager: SettingsManager,
+        item: Item,
+        customFields: List<CustomField>,
+        pendingAttachments: List<PendingAttachment>
+    ): Long {
+        val computedExpiry = DateUtils.calculateExpiryDate(
+            startDateMillis = item.warrantyStartDate,
+            warrantyValue = item.warrantyValue,
+            warrantyUnit = item.warrantyUnit
+        )
+
+        val now = System.currentTimeMillis()
+        val itemToSave = item.copy(
+            expiryDate = computedExpiry,
+            updatedAt = now,
+            createdAt = if (item.id == 0L) now else item.createdAt
+        )
+
+        val itemId = if (itemToSave.id == 0L) {
+            itemDao.insertItem(itemToSave)
+        } else {
+            itemDao.updateItem(itemToSave)
+            itemToSave.id
+        }
+
+        // 1. Update CustomFields
+        customFieldDao.deleteCustomFieldsForItem(itemId)
+        val validFields = customFields
+            .filter { it.name.isNotBlank() }
+            .mapIndexed { index, field ->
+                field.copy(
+                    id = 0L,
+                    itemId = itemId,
+                    name = field.name.trim(),
+                    value = field.value.trim(),
+                    sortOrder = index
+                )
+            }
+        if (validFields.isNotEmpty()) {
+            customFieldDao.insertCustomFields(validFields)
+        }
+
+        // 2. Update Attachments
+        val categoryName = categoryDao.getCategoryById(itemToSave.categoryId)?.name ?: "UNCATEGORIZED"
+        val existingAttachments = attachmentDao.getAttachmentsForItemOnce(itemId)
+        val retainedExistingIds = pendingAttachments.mapNotNull { it.existingAttachmentId }.toSet()
+
+        // Delete removed attachments from storage and DB
+        existingAttachments.filter { it.id !in retainedExistingIds }.forEach { removed ->
+            FileStorageHelper.deleteAttachmentFile(removed.localPath)
+            attachmentDao.deleteAttachmentById(removed.id)
+        }
+
+        // Save new or retained attachments
+        for (pending in pendingAttachments) {
+            val savedAttachment = FileStorageHelper.saveAttachmentToStorage(
+                context = context,
+                settingsManager = settingsManager,
+                pending = pending,
+                categoryName = categoryName,
+                itemId = itemId
+            )
+            if (savedAttachment != null) {
+                attachmentDao.insertAttachment(savedAttachment)
+            }
+        }
+
+        // 3. Reschedule Reminders
+        rescheduleReminders(itemId = itemId, expiryDate = computedExpiry)
+
+        return itemId
+    }
+
+    private suspend fun rescheduleReminders(itemId: Long, expiryDate: Long?) {
+        reminderDao.deleteRemindersForItem(itemId)
+        if (expiryDate == null || expiryDate <= 0L) return
+
+        val reminderPairs = DateUtils.calculateReminderDates(expiryDate)
+        val now = System.currentTimeMillis()
+        val reminders = reminderPairs.map { (daysBefore, reminderDate) ->
+            Reminder(
+                itemId = itemId,
+                reminderDate = reminderDate,
+                daysBefore = daysBefore,
+                isSent = reminderDate < now
+            )
+        }
+        reminderDao.insertReminders(reminders)
+    }
+
+    suspend fun deleteAttachment(attachment: Attachment) {
+        FileStorageHelper.deleteAttachmentFile(attachment.localPath)
+        attachmentDao.deleteAttachmentById(attachment.id)
+    }
+
+    suspend fun deleteItem(context: Context, itemId: Long) {
+        val details = itemDao.getItemWithDetailsByIdOnce(itemId)
+        if (details != null) {
+            val categoryName = details.category?.name ?: "UNCATEGORIZED"
+            FileStorageHelper.deleteItemAttachmentsFolder(
+                context = context,
+                categoryName = categoryName,
+                itemId = itemId,
+                attachments = details.attachments
+            )
+        }
+        reminderDao.deleteRemindersForItem(itemId)
+        itemDao.deleteItemById(itemId)
     }
 
     suspend fun seedSampleDataIfEmpty() {
-        // We check if database already has data
-        // If empty, seed sample FlipKart / Amazon invoices
+        val categories = ensureDefaultCategories()
+        if (itemDao.getItemCount() > 0) return
+
+        val electronicsId = categories.find { it.name == "ELECTRONICS" }?.id ?: categories.first().id
+        val vehicleId = categories.find { it.name == "VEHICLE" }?.id ?: categories.first().id
+        val shoppingId = categories.find { it.name == "SHOPPING" }?.id ?: categories.first().id
+
         val now = System.currentTimeMillis()
-        val oneMonthAgo = now - TimeUnit.DAYS.toMillis(35)
-        val fiveMonthsAgo = now - TimeUnit.DAYS.toMillis(150)
+        val fiveMonthsAgo = now - TimeUnit.DAYS.toMillis(165)
+        val oneMonthAgo = now - TimeUnit.DAYS.toMillis(30)
         val thirteenMonthsAgo = now - TimeUnit.DAYS.toMillis(400)
 
-        // Invoice 1: Expiring Soon (Purchased 5 months ago with 6 months warranty -> ~30 days left)
-        val invoice1 = Invoice(
-            sellerName = "Flipkart Internet Pvt Ltd",
-            invoiceNumber = "FK-IN-2024-88492",
-            orderId = "OD309485720194820",
-            invoiceDate = fiveMonthsAgo,
-            totalAmount = 18999.00,
-            taxAmount = 2898.15,
-            sourceType = "PDF"
+        // Item 1: Expiring Soon (Nothing Phone 2a)
+        val expiry1 = DateUtils.calculateExpiryDate(fiveMonthsAgo, 6, WarrantyUnit.MONTHS)
+        val item1Id = itemDao.insertItem(
+            Item(
+                title = "Nothing Phone (2a) 5G",
+                categoryId = electronicsId,
+                sellerName = "Flipkart Internet Pvt Ltd",
+                invoiceNumber = "FK-IN-2026-88492",
+                orderId = "OD309485720194820",
+                purchaseDate = fiveMonthsAgo,
+                amount = 23999.0,
+                warrantyValue = 6,
+                warrantyUnit = WarrantyUnit.MONTHS,
+                warrantyStartDate = fiveMonthsAgo,
+                expiryDate = expiry1,
+                notes = "Extended protection plan included"
+            )
         )
-        val item1 = InvoiceItem(
-            productName = "Nothing Phone (2a) 5G (8GB/128GB)",
-            serialNumber = "NP2A884920194",
-            quantity = 1,
-            amount = 18999.00,
-            warrantyMonths = 6,
-            warrantyStartDate = fiveMonthsAgo,
-            notes = "Brand warranty, registered on Nothing website"
+        customFieldDao.insertCustomFields(
+            listOf(
+                CustomField(itemId = item1Id, name = "IMEI", type = CustomFieldType.TEXT, value = "359018293847102", sortOrder = 0),
+                CustomField(itemId = item1Id, name = "Extended Care", type = CustomFieldType.YES_NO, value = "YES", sortOrder = 1)
+            )
         )
+        rescheduleReminders(item1Id, expiry1)
 
-        // Invoice 2: Active (Purchased 1 month ago with 12 months warranty)
-        val invoice2 = Invoice(
-            sellerName = "Amazon Retail India",
-            invoiceNumber = "AMZN-2024-99381",
-            orderId = "403-9182743-1092837",
-            invoiceDate = oneMonthAgo,
-            totalAmount = 8990.00,
-            taxAmount = 1371.35,
-            sourceType = "PDF"
+        // Item 2: Active (Washing Machine)
+        val expiry2 = DateUtils.calculateExpiryDate(oneMonthAgo, 2, WarrantyUnit.YEARS)
+        val item2Id = itemDao.insertItem(
+            Item(
+                title = "LG Front Load Washing Machine",
+                categoryId = shoppingId,
+                sellerName = "Croma Electronics",
+                invoiceNumber = "CR-2026-44109",
+                orderId = "ORD-99281",
+                purchaseDate = oneMonthAgo,
+                amount = 34990.0,
+                warrantyValue = 2,
+                warrantyUnit = WarrantyUnit.YEARS,
+                warrantyStartDate = oneMonthAgo,
+                expiryDate = expiry2,
+                notes = "2 years comprehensive + 10 years motor warranty"
+            )
         )
-        val item2 = InvoiceItem(
-            productName = "Sony WH-CH720N Wireless Headphones",
-            serialNumber = "S2024CH720N99",
-            quantity = 1,
-            amount = 8990.00,
-            warrantyMonths = 12,
-            warrantyStartDate = oneMonthAgo,
-            notes = "Sony India 1-Year warranty card included"
+        customFieldDao.insertCustomFields(
+            listOf(
+                CustomField(itemId = item2Id, name = "Serial Number", type = CustomFieldType.TEXT, value = "LGWM2026X99", sortOrder = 0),
+                CustomField(itemId = item2Id, name = "Capacity (kg)", type = CustomFieldType.NUMBER, value = "8", sortOrder = 1)
+            )
         )
+        rescheduleReminders(item2Id, expiry2)
 
-        // Invoice 3: Expired (Purchased 13 months ago with 12 months warranty)
-        val invoice3 = Invoice(
-            sellerName = "Croma Electronics",
-            invoiceNumber = "CR-2023-11204",
-            orderId = "CR-ORD-00918",
-            invoiceDate = thirteenMonthsAgo,
-            totalAmount = 2499.00,
-            taxAmount = 381.20,
-            sourceType = "IMAGE"
+        // Item 3: Expired (Vehicle Insurance / Battery)
+        val expiry3 = DateUtils.calculateExpiryDate(thirteenMonthsAgo, 12, WarrantyUnit.MONTHS)
+        val item3Id = itemDao.insertItem(
+            Item(
+                title = "Amaron Pro Bike Battery",
+                categoryId = vehicleId,
+                sellerName = "AutoZone Service Center",
+                invoiceNumber = "AZ-2025-1120",
+                orderId = "",
+                purchaseDate = thirteenMonthsAgo,
+                amount = 1850.0,
+                warrantyValue = 12,
+                warrantyUnit = WarrantyUnit.MONTHS,
+                warrantyStartDate = thirteenMonthsAgo,
+                expiryDate = expiry3,
+                notes = "Free replacement warranty period ended"
+            )
         )
-        val item3 = InvoiceItem(
-            productName = "Logitech K380 Multi-Device Keyboard",
-            serialNumber = "LOGI-K380-7718",
-            quantity = 1,
-            amount = 2499.00,
-            warrantyMonths = 12,
-            warrantyStartDate = thirteenMonthsAgo,
-            notes = "Expired 1-year hardware warranty"
+        customFieldDao.insertCustomFields(
+            listOf(
+                CustomField(itemId = item3Id, name = "Battery Code", type = CustomFieldType.TEXT, value = "AM-PRO-9912", sortOrder = 0)
+            )
         )
-
-        saveInvoiceWithItems(invoice1, listOf(item1))
-        saveInvoiceWithItems(invoice2, listOf(item2))
-        saveInvoiceWithItems(invoice3, listOf(item3))
+        rescheduleReminders(item3Id, expiry3)
     }
 }

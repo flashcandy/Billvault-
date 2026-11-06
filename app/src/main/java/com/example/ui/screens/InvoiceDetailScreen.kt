@@ -1,7 +1,6 @@
 package com.example.ui.screens
 
-import android.content.Intent
-import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -20,9 +19,10 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.OpenInNew
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.Description
-import androidx.compose.material.icons.filled.OpenInNew
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -37,37 +37,42 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.data.model.InvoiceItem
+import com.example.data.model.Attachment
 import com.example.ui.components.NothingButton
 import com.example.ui.components.NothingDivider
-import com.example.ui.components.NothingHeader
+import com.example.ui.components.NothingMarkerDot
 import com.example.ui.components.NothingStatusDot
 import com.example.ui.theme.DotoFontFamily
 import com.example.ui.theme.NothingRed
 import com.example.ui.theme.SpaceGroteskFontFamily
 import com.example.ui.viewmodel.MainViewModel
 import com.example.utils.DateUtils
-import java.io.File
+import com.example.utils.FileStorageHelper
+import kotlin.math.abs
 
 @Composable
 fun InvoiceDetailScreen(
-    invoiceId: Long,
+    itemId: Long,
     viewModel: MainViewModel,
+    onEditItem: (Long) -> Unit,
     onBack: () -> Unit
 ) {
+    BackHandler { onBack() }
+
     val context = LocalContext.current
-    val invoiceWithItemsState by viewModel.repository.getInvoiceWithItemsById(invoiceId).collectAsStateWithLifecycle(initialValue = null)
+    val detailsState by viewModel.repository.getItemWithDetailsById(itemId)
+        .collectAsStateWithLifecycle(initialValue = null)
 
     var showDeleteDialog by remember { mutableStateOf(false) }
+    var attachmentToDelete by remember { mutableStateOf<Attachment?>(null) }
 
-    val invoiceWithItems = invoiceWithItemsState
+    val details = detailsState
 
     Scaffold(
         topBar = {
@@ -88,7 +93,7 @@ fun InvoiceDetailScreen(
                 Spacer(modifier = Modifier.width(8.dp))
 
                 Text(
-                    text = "INVOICE DETAILS",
+                    text = "ITEM DETAILS",
                     style = MaterialTheme.typography.titleLarge.copy(
                         fontFamily = DotoFontFamily,
                         letterSpacing = 1.5.sp
@@ -98,12 +103,23 @@ fun InvoiceDetailScreen(
                 )
 
                 IconButton(
+                    onClick = { onEditItem(itemId) },
+                    modifier = Modifier.testTag("detail_edit_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = "Edit Item",
+                        tint = MaterialTheme.colorScheme.onBackground
+                    )
+                }
+
+                IconButton(
                     onClick = { showDeleteDialog = true },
                     modifier = Modifier.testTag("detail_delete_button")
                 ) {
                     Icon(
                         imageVector = Icons.Default.Delete,
-                        contentDescription = "Delete Invoice",
+                        contentDescription = "Delete Item",
                         tint = NothingRed
                     )
                 }
@@ -111,7 +127,7 @@ fun InvoiceDetailScreen(
         },
         containerColor = MaterialTheme.colorScheme.background
     ) { paddingValues ->
-        if (invoiceWithItems == null) {
+        if (details == null) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
@@ -119,7 +135,7 @@ fun InvoiceDetailScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "INVOICE NOT FOUND",
+                    text = "ITEM NOT FOUND",
                     style = MaterialTheme.typography.titleMedium.copy(fontFamily = DotoFontFamily),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -127,8 +143,12 @@ fun InvoiceDetailScreen(
             return@Scaffold
         }
 
-        val invoice = invoiceWithItems.invoice
-        val items = invoiceWithItems.items
+        val item = details.item
+        val category = details.category
+        val customFields = details.customFields.sortedBy { it.sortOrder }
+        val attachments = details.attachments.sortedBy { it.addedAt }
+        val status = DateUtils.getExpiryStatus(item.expiryDate)
+        val daysRemaining = DateUtils.getDaysRemaining(item.expiryDate)
 
         LazyColumn(
             modifier = Modifier
@@ -137,7 +157,7 @@ fun InvoiceDetailScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Seller & Header Info
+            // Header & Warranty Countdown Box
             item {
                 Box(
                     modifier = Modifier
@@ -147,9 +167,31 @@ fun InvoiceDetailScreen(
                         .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
                         .padding(18.dp)
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (category != null) {
+                                    NothingMarkerDot(colorMarker = category.colorMarker)
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = category.name.uppercase(),
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontWeight = FontWeight.Bold,
+                                            letterSpacing = 1.5.sp
+                                        ),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            }
+                            NothingStatusDot(status = status)
+                        }
+
                         Text(
-                            text = invoice.sellerName.uppercase(),
+                            text = item.title.uppercase(),
                             style = MaterialTheme.typography.displayMedium.copy(
                                 fontFamily = DotoFontFamily,
                                 letterSpacing = 1.5.sp
@@ -157,81 +199,270 @@ fun InvoiceDetailScreen(
                             color = MaterialTheme.colorScheme.onBackground
                         )
 
-                        Text(
-                            text = DateUtils.formatCurrency(invoice.totalAmount),
-                            style = MaterialTheme.typography.displayLarge.copy(
-                                fontFamily = DotoFontFamily,
-                                letterSpacing = 1.sp
-                            ),
-                            color = NothingRed
-                        )
+                        if (item.amount != null && item.amount > 0) {
+                            Text(
+                                text = DateUtils.formatCurrency(item.amount),
+                                style = MaterialTheme.typography.displayLarge.copy(
+                                    fontFamily = DotoFontFamily,
+                                    letterSpacing = 1.sp
+                                ),
+                                color = NothingRed
+                            )
+                        }
 
                         NothingDivider(modifier = Modifier.padding(vertical = 4.dp))
 
-                        DetailMetaRow(label = "INVOICE NUMBER", value = "#${invoice.invoiceNumber.ifBlank { "N/A" }}")
-                        DetailMetaRow(label = "ORDER ID", value = invoice.orderId.ifBlank { "N/A" })
-                        DetailMetaRow(label = "INVOICE DATE", value = DateUtils.formatDate(invoice.invoiceDate))
-                        if (invoice.taxAmount > 0) {
-                            DetailMetaRow(label = "TAX / GST", value = DateUtils.formatCurrency(invoice.taxAmount))
+                        if (item.sellerName.isNotBlank()) {
+                            DetailMetaRow(label = "SELLER / STORE", value = item.sellerName)
+                        }
+                        if (item.invoiceNumber.isNotBlank()) {
+                            DetailMetaRow(label = "INVOICE / BILL #", value = "#${item.invoiceNumber}")
+                        }
+                        if (item.orderId.isNotBlank()) {
+                            DetailMetaRow(label = "ORDER ID", value = item.orderId)
+                        }
+                        DetailMetaRow(label = "PURCHASE DATE", value = DateUtils.formatDate(item.purchaseDate))
+
+                        if (item.warrantyValue != null && item.warrantyValue > 0) {
+                            DetailMetaRow(
+                                label = "WARRANTY DURATION",
+                                value = "${item.warrantyValue} ${item.warrantyUnit}"
+                            )
+                            DetailMetaRow(
+                                label = "WARRANTY START",
+                                value = DateUtils.formatDate(item.warrantyStartDate)
+                            )
+                            DetailMetaRow(
+                                label = "EXPIRY DATE",
+                                value = DateUtils.formatDate(item.expiryDate)
+                            )
+                        } else {
+                            DetailMetaRow(label = "WARRANTY / EXPIRY", value = "NONE")
+                        }
+
+                        NothingDivider(modifier = Modifier.padding(vertical = 4.dp))
+
+                        // Countdown Banner
+                        val (bannerText, bannerBg, bannerColor) = when {
+                            daysRemaining == null -> Triple(
+                                "NO WARRANTY / NO EXPIRY SCHEDULED",
+                                MaterialTheme.colorScheme.surfaceVariant,
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            status == DateUtils.ExpiryStatus.EXPIRED -> Triple(
+                                "EXPIRED (${abs(daysRemaining)} DAYS AGO)",
+                                NothingRed.copy(alpha = 0.2f),
+                                NothingRed
+                            )
+                            status == DateUtils.ExpiryStatus.EXPIRING_SOON -> Triple(
+                                "EXPIRING SOON: $daysRemaining DAYS REMAINING",
+                                MaterialTheme.colorScheme.onBackground,
+                                MaterialTheme.colorScheme.background
+                            )
+                            else -> Triple(
+                                "ACTIVE: $daysRemaining DAYS REMAINING",
+                                NothingRed.copy(alpha = 0.1f),
+                                NothingRed
+                            )
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(bannerBg)
+                                .padding(vertical = 8.dp, horizontal = 12.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = bannerText,
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    fontFamily = DotoFontFamily,
+                                    fontWeight = FontWeight.Bold,
+                                    letterSpacing = 1.5.sp
+                                ),
+                                color = bannerColor
+                            )
                         }
                     }
                 }
             }
 
-            // Document file action
-            if (!invoice.sourceFilePath.isNullOrBlank()) {
+            // Custom Fields Section (in sortOrder)
+            if (customFields.isNotEmpty()) {
                 item {
-                    val file = File(invoice.sourceFilePath)
-                    if (file.exists()) {
-                        NothingButton(
-                            text = "OPEN SOURCE FILE",
-                            icon = Icons.Default.OpenInNew,
-                            isPrimary = false,
-                            onClick = {
-                                try {
-                                    val uri = Uri.fromFile(file)
-                                    val intent = Intent(Intent.ACTION_VIEW).apply {
-                                        setDataAndType(uri, if (invoice.sourceType == "PDF") "application/pdf" else "image/*")
-                                        flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK
+                    Text(
+                        text = "CUSTOM FIELDS (${customFields.size})",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontFamily = DotoFontFamily,
+                            letterSpacing = 1.5.sp
+                        ),
+                        color = NothingRed
+                    )
+                }
+
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                            .padding(16.dp)
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                            customFields.forEachIndexed { idx, field ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = field.name.uppercase(),
+                                            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Text(
+                                            text = field.type,
+                                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                        )
                                     }
-                                    context.startActivity(intent)
-                                } catch (e: Exception) {
-                                    e.printStackTrace()
+                                    Text(
+                                        text = field.value.ifBlank { "—" },
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            fontFamily = SpaceGroteskFontFamily,
+                                            fontWeight = FontWeight.Bold
+                                        ),
+                                        color = MaterialTheme.colorScheme.onBackground
+                                    )
+                                }
+                                if (idx < customFields.lastIndex) {
+                                    NothingDivider()
                                 }
                             }
+                        }
+                    }
+                }
+            }
+
+            // Attachments Section
+            if (attachments.isNotEmpty()) {
+                item {
+                    Text(
+                        text = "ATTACHMENTS (${attachments.size})",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontFamily = DotoFontFamily,
+                            letterSpacing = 1.5.sp
+                        ),
+                        color = NothingRed
+                    )
+                }
+
+                items(attachments, key = { it.id }) { attachment ->
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                            .padding(14.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Icon(
+                                imageVector = Icons.Default.AttachFile,
+                                contentDescription = null,
+                                tint = NothingRed,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = attachment.fileName,
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontFamily = SpaceGroteskFontFamily,
+                                        fontWeight = FontWeight.Bold
+                                    ),
+                                    color = MaterialTheme.colorScheme.onBackground
+                                )
+                                Text(
+                                    text = "${attachment.mimeType.uppercase()} • ${DateUtils.formatFileSize(attachment.sizeBytes)}",
+                                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+
+                            IconButton(
+                                onClick = {
+                                    FileStorageHelper.openAttachmentWithIntent(context, attachment)
+                                },
+                                modifier = Modifier.testTag("preview_attachment_${attachment.id}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.OpenInNew,
+                                    contentDescription = "Preview Attachment",
+                                    tint = MaterialTheme.colorScheme.onBackground
+                                )
+                            }
+
+                            IconButton(
+                                onClick = { attachmentToDelete = attachment },
+                                modifier = Modifier.testTag("delete_attachment_${attachment.id}")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Delete,
+                                    contentDescription = "Delete Attachment",
+                                    tint = NothingRed
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Notes Section
+            if (item.notes.isNotBlank()) {
+                item {
+                    Text(
+                        text = "NOTES",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontFamily = DotoFontFamily,
+                            letterSpacing = 1.5.sp
+                        ),
+                        color = NothingRed
+                    )
+                }
+
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                            .padding(16.dp)
+                    ) {
+                        Text(
+                            text = item.notes,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onBackground
                         )
                     }
                 }
             }
 
-            // Products section
-            item {
-                Text(
-                    text = "PURCHASED PRODUCTS (${items.size})",
-                    style = MaterialTheme.typography.labelLarge.copy(
-                        fontFamily = DotoFontFamily,
-                        letterSpacing = 1.5.sp
-                    ),
-                    color = NothingRed
-                )
-            }
-
-            items(items) { item ->
-                DetailProductCard(item = item)
-            }
-
-            item {
-                Spacer(modifier = Modifier.height(32.dp))
-            }
+            item { Spacer(modifier = Modifier.height(32.dp)) }
         }
     }
 
-    if (showDeleteDialog) {
+    if (attachmentToDelete != null) {
+        val targetAtt = attachmentToDelete!!
         AlertDialog(
-            onDismissRequest = { showDeleteDialog = false },
+            onDismissRequest = { attachmentToDelete = null },
             title = {
                 Text(
-                    text = "DELETE INVOICE",
+                    text = "DELETE ATTACHMENT?",
                     style = MaterialTheme.typography.titleMedium.copy(
                         fontFamily = DotoFontFamily,
                         letterSpacing = 1.5.sp
@@ -241,7 +472,49 @@ fun InvoiceDetailScreen(
             },
             text = {
                 Text(
-                    text = "Are you sure you want to delete this invoice and all associated reminders? This action cannot be undone.",
+                    text = "Remove '${targetAtt.fileName}' from this item and delete its stored file?",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+            },
+            confirmButton = {
+                NothingButton(
+                    text = "DELETE FILE",
+                    onClick = {
+                        viewModel.deleteAttachment(targetAtt)
+                        attachmentToDelete = null
+                    },
+                    modifier = Modifier.width(140.dp)
+                )
+            },
+            dismissButton = {
+                NothingButton(
+                    text = "CANCEL",
+                    isPrimary = false,
+                    onClick = { attachmentToDelete = null },
+                    modifier = Modifier.width(100.dp)
+                )
+            },
+            containerColor = MaterialTheme.colorScheme.surface,
+            shape = RoundedCornerShape(8.dp)
+        )
+    }
+
+    if (showDeleteDialog) {
+        AlertDialog(
+            onDismissRequest = { showDeleteDialog = false },
+            title = {
+                Text(
+                    text = "DELETE ITEM?",
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontFamily = DotoFontFamily,
+                        letterSpacing = 1.5.sp
+                    ),
+                    color = NothingRed
+                )
+            },
+            text = {
+                Text(
+                    text = "Are you sure you want to delete this item, its reminders, and all stored attachment files? This action cannot be undone.",
                     style = MaterialTheme.typography.bodyMedium
                 )
             },
@@ -250,7 +523,7 @@ fun InvoiceDetailScreen(
                     text = "CONFIRM DELETE",
                     onClick = {
                         showDeleteDialog = false
-                        viewModel.deleteInvoice(invoiceId) {
+                        viewModel.deleteItem(itemId) {
                             onBack()
                         }
                     },
@@ -290,85 +563,5 @@ fun DetailMetaRow(label: String, value: String) {
             ),
             color = MaterialTheme.colorScheme.onBackground
         )
-    }
-}
-
-@Composable
-fun DetailProductCard(item: InvoiceItem) {
-    val status = DateUtils.getExpiryStatus(item.warrantyEndDate)
-    val daysRemaining = DateUtils.getDaysRemaining(item.warrantyEndDate)
-
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(8.dp))
-            .background(MaterialTheme.colorScheme.surface)
-            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
-            .padding(16.dp)
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                NothingStatusDot(status = status, modifier = Modifier.padding(end = 8.dp))
-
-                Text(
-                    text = item.productName,
-                    style = MaterialTheme.typography.titleMedium.copy(
-                        fontFamily = SpaceGroteskFontFamily,
-                        fontWeight = FontWeight.Bold
-                    ),
-                    color = MaterialTheme.colorScheme.onBackground,
-                    modifier = Modifier.weight(1f)
-                )
-
-                if (item.amount > 0) {
-                    Text(
-                        text = DateUtils.formatCurrency(item.amount),
-                        style = MaterialTheme.typography.titleSmall.copy(
-                            fontFamily = DotoFontFamily,
-                            fontWeight = FontWeight.Bold
-                        ),
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            DetailMetaRow(label = "SERIAL / IMEI", value = item.serialNumber.ifBlank { "N/A" })
-            DetailMetaRow(label = "WARRANTY DURATION", value = "${item.warrantyMonths} Months")
-            DetailMetaRow(label = "START DATE", value = DateUtils.formatDate(item.warrantyStartDate))
-            DetailMetaRow(label = "EXPIRY DATE", value = DateUtils.formatDate(item.warrantyEndDate))
-
-            NothingDivider(modifier = Modifier.padding(vertical = 4.dp))
-
-            // Warranty Countdown Banner
-            val (statusText, statusBg, statusColor) = when (status) {
-                DateUtils.ExpiryStatus.EXPIRED -> Triple("WARRANTY EXPIRED (${Math.abs(daysRemaining)} DAYS AGO)", NothingRed.copy(alpha = 0.2f), NothingRed)
-                DateUtils.ExpiryStatus.EXPIRING_SOON -> Triple("EXPIRING SOON: $daysRemaining DAYS REMAINING", MaterialTheme.colorScheme.onBackground, MaterialTheme.colorScheme.background)
-                DateUtils.ExpiryStatus.ACTIVE -> Triple("ACTIVE: $daysRemaining DAYS REMAINING", NothingRed.copy(alpha = 0.1f), NothingRed)
-            }
-
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(statusBg)
-                    .padding(vertical = 8.dp, horizontal = 12.dp),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = statusText,
-                    style = MaterialTheme.typography.labelMedium.copy(
-                        fontFamily = DotoFontFamily,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 1.5.sp
-                    ),
-                    color = statusColor
-                )
-            }
-        }
     }
 }
