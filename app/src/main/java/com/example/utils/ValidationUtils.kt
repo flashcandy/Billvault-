@@ -10,6 +10,44 @@ sealed class ValidationResult {
 object ValidationUtils {
 
     const val MAX_CATEGORY_NAME_LENGTH = 20
+    const val MAX_TITLE_LENGTH = 60
+
+    /**
+     * Replaces line breaks (\r\n, \n, \r) with spaces.
+     */
+    fun replaceLineBreaksWithSpaces(raw: String): String {
+        return raw.replace("\r\n", " ")
+            .replace('\n', ' ')
+            .replace('\r', ' ')
+    }
+
+    /**
+     * Normalizes a title:
+     * - Replaces line breaks with spaces
+     * - Collapses multiple spaces into a single space
+     * - Trims leading and trailing whitespace
+     */
+    fun normalizeTitle(raw: String): String {
+        return replaceLineBreaksWithSpaces(raw)
+            .replace(Regex("""\s+"""), " ")
+            .trim()
+    }
+
+    /**
+     * Validates a title:
+     * - Must not be blank
+     * - Normalized length must not exceed MAX_TITLE_LENGTH (60)
+     */
+    fun validateTitle(raw: String): ValidationResult {
+        val normalized = normalizeTitle(raw)
+        if (normalized.isBlank()) {
+            return ValidationResult.Invalid("Title is required")
+        }
+        if (normalized.length > MAX_TITLE_LENGTH) {
+            return ValidationResult.Invalid("Title cannot exceed $MAX_TITLE_LENGTH characters (currently ${normalized.length})")
+        }
+        return ValidationResult.Valid(normalized)
+    }
 
     /**
       * Validates a category name:

@@ -18,11 +18,22 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
+import com.example.data.model.Category
+import com.example.data.model.Item
+import com.example.data.model.ItemWithDetails
+import com.example.ui.screens.ItemRowCard
+import org.junit.Rule
 import java.time.ZoneId
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [36])
 class BillValidUnitTest {
+
+    @get:Rule
+    val composeTestRule = createComposeRule()
 
     private val testZone = ZoneId.of("UTC")
 
@@ -236,5 +247,88 @@ class BillValidUnitTest {
 
         db.close()
         context.deleteDatabase(dbName)
+    }
+
+    @Test
+    fun `title normalization replaces line breaks and collapses whitespace`() {
+        val pasted = "Amount ₹ Discounts /Coupons ₹\r\nTaxable Value ₹\nSGST /UTGST ₹\rCGST ₹   Total ₹"
+        val normalized = ValidationUtils.normalizeTitle(pasted)
+        assertEquals("Amount ₹ Discounts /Coupons ₹ Taxable Value ₹ SGST /UTGST ₹ CGST ₹ Total ₹", normalized)
+        assertEquals(
+            "Washing Machine",
+            ValidationUtils.normalizeTitle("   Washing   \n  Machine   ")
+        )
+    }
+
+    @Test
+    fun `title validation enforces 60 char limit and non-blank`() {
+        // Blank
+        val blank = ValidationUtils.validateTitle("   \n  ")
+        assertTrue(blank is ValidationResult.Invalid)
+
+        // 60 chars - valid
+        val exact60 = "A".repeat(60)
+        val valid60 = ValidationUtils.validateTitle(exact60)
+        assertTrue(valid60 is ValidationResult.Valid)
+        assertEquals(exact60, (valid60 as ValidationResult.Valid).cleanedValue)
+
+        // 61 chars - invalid with descriptive error
+        val tooLong = "A".repeat(61)
+        val invalidTooLong = ValidationUtils.validateTitle(tooLong)
+        assertTrue(invalidTooLong is ValidationResult.Invalid)
+        assertTrue((invalidTooLong as ValidationResult.Invalid).errorMessage.contains("60"))
+    }
+
+    @Test
+    fun `recalculating expiry when warranty start date changes`() {
+        // Purchase date: Jan 1, 2026
+        val purchaseDate = DateUtils.localDateToMillis(2026, 1, 1, testZone)
+        val initialExpiry = DateUtils.calculateExpiryDate(purchaseDate, 1, WarrantyUnit.YEARS, testZone)
+        assertEquals(DateUtils.localDateToMillis(2027, 1, 1, testZone), initialExpiry)
+
+        // Delivery date (warranty start date edited): Jan 15, 2026
+        val deliveryDate = DateUtils.localDateToMillis(2026, 1, 15, testZone)
+        val recalculatedExpiry = DateUtils.calculateExpiryDate(deliveryDate, 1, WarrantyUnit.YEARS, testZone)
+        assertEquals(DateUtils.localDateToMillis(2027, 1, 15, testZone), recalculatedExpiry)
+    }
+
+    @Test
+    fun `item row card handles 200 character title without breaking layout`() {
+        val longTitle = "Amount ₹ Discounts /Coupons ₹ Taxable Value ₹ SGST /UTGST ₹ CGST ₹ Total ₹ " + "A".repeat(150)
+        assertTrue(longTitle.length >= 200)
+
+        val item = Item(
+            id = 1,
+            title = longTitle,
+            categoryId = 1,
+            sellerName = "Flipkart",
+            invoiceNumber = "FK-12345",
+            orderId = "OD-98765",
+            purchaseDate = 1700000000000,
+            amount = 25000.0,
+            warrantyValue = 1,
+            warrantyUnit = "YEARS",
+            warrantyStartDate = 1700000000000,
+            expiryDate = 1731536000000,
+            notes = "Invoice note",
+            createdAt = 1700000000000,
+            updatedAt = 1700000000000
+        )
+        val category = Category(id = 1, name = "ELECTRONICS", isDefault = true)
+        val details = ItemWithDetails(
+            item = item,
+            category = category,
+            customFields = emptyList(),
+            attachments = emptyList(),
+            reminders = emptyList()
+        )
+
+        composeTestRule.setContent {
+            ItemRowCard(details = details, onClick = {})
+        }
+
+        // Verify the component renders and displays the category/seller and amount
+        composeTestRule.onNodeWithText("ELECTRONICS • Flipkart").assertIsDisplayed()
+        composeTestRule.onNodeWithText(DateUtils.formatCurrency(25000.0)).assertIsDisplayed()
     }
 }

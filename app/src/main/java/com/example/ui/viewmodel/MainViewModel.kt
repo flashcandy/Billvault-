@@ -182,6 +182,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun updateWarrantyStartDate(
+        itemId: Long,
+        newStartDateMillis: Long,
+        onComplete: (() -> Unit)? = null
+    ) {
+        viewModelScope.launch {
+            repository.updateWarrantyStartDate(itemId, newStartDateMillis)
+            onComplete?.invoke()
+        }
+    }
+
     fun clearAllData() {
         viewModelScope.launch(Dispatchers.IO) {
             settingsManager.clearAllData()

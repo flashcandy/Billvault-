@@ -242,11 +242,14 @@ fun NothingTextField(
     onValueChange: (String) -> Unit,
     label: String,
     modifier: Modifier = Modifier,
+    textFieldModifier: Modifier = Modifier,
     placeholder: String = "",
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     singleLine: Boolean = true,
     readOnly: Boolean = false,
     errorMessage: String? = null,
+    helperText: String? = null,
+    counterText: String? = null,
     trailingIcon: (@Composable () -> Unit)? = null,
     testTag: String = ""
 ) {
@@ -289,6 +292,7 @@ fun NothingTextField(
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag(testTag)
+                .then(textFieldModifier)
         )
         if (!errorMessage.isNullOrBlank()) {
             Text(
@@ -302,6 +306,45 @@ fun NothingTextField(
                     .padding(top = 4.dp)
                     .testTag("${testTag}_error")
             )
+        }
+        if (!helperText.isNullOrBlank() || !counterText.isNullOrBlank()) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                if (!helperText.isNullOrBlank()) {
+                    Text(
+                        text = helperText,
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            fontSize = 11.sp,
+                            fontFamily = SpaceGroteskFontFamily
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("${testTag}_helper")
+                    )
+                } else {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+                if (!counterText.isNullOrBlank()) {
+                    Text(
+                        text = counterText,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = DotoFontFamily,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold
+                        ),
+                        color = if (errorMessage != null) NothingRed else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier
+                            .padding(start = 8.dp)
+                            .testTag("${testTag}_counter")
+                    )
+                }
+            }
         }
     }
 }

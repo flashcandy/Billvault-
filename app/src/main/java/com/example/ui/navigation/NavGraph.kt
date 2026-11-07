@@ -166,7 +166,8 @@ fun MainNavGraph(
                     HomeScreen(
                         viewModel = viewModel,
                         onAddItemClick = { navController.navigate(Routes.ADD) },
-                        onItemClick = { id -> navController.navigate(Routes.detailRoute(id)) }
+                        onItemClick = { id -> navController.navigate(Routes.detailRoute(id)) },
+                        onEditItem = { id -> navController.navigate(Routes.editRoute(id)) }
                     )
                 }
 

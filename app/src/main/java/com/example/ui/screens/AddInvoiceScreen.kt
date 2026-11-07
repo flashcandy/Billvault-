@@ -50,6 +50,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
@@ -58,6 +60,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.utils.ValidationResult
+import com.example.utils.ValidationUtils
 import com.example.data.model.Category
 import com.example.data.model.CustomField
 import com.example.data.model.CustomFieldType
@@ -175,6 +179,15 @@ fun AddInvoiceScreen(
         }
     }
 
+    val titleFocusRequester = remember { FocusRequester() }
+    LaunchedEffect(isLoaded) {
+        if (isLoaded) {
+            try {
+                titleFocusRequester.requestFocus()
+            } catch (_: Exception) {}
+        }
+    }
+
     // Templates for selected category
     val activeCategoryId = selectedCategoryId ?: 0L
     val categoryTemplates by viewModel.repository.getTemplatesForCategory(activeCategoryId)
@@ -261,10 +274,14 @@ fun AddInvoiceScreen(
                     onClick = {
                         // Validate required fields inline
                         var hasError = false
-                        if (title.trim().isEmpty()) {
-                            titleError = "Title is required"
+                        val titleValidation = ValidationUtils.validateTitle(title)
+                        val cleanTitle: String
+                        if (titleValidation is ValidationResult.Invalid) {
+                            titleError = titleValidation.errorMessage
                             hasError = true
+                            cleanTitle = ""
                         } else {
+                            cleanTitle = (titleValidation as ValidationResult.Valid).cleanedValue
                             titleError = null
                         }
 
@@ -292,7 +309,7 @@ fun AddInvoiceScreen(
 
                         val itemToSave = Item(
                             id = editItemId ?: 0L,
-                            title = title.trim(),
+                            title = cleanTitle,
                             categoryId = selectedCategoryId!!,
                             sellerName = sellerName.trim(),
                             invoiceNumber = invoiceNumber.trim(),
@@ -342,13 +359,25 @@ fun AddInvoiceScreen(
             item {
                 NothingTextField(
                     value = title,
-                    onValueChange = {
-                        title = it
-                        if (it.isNotBlank()) titleError = null
+                    onValueChange = { input ->
+                        val singleLine = ValidationUtils.replaceLineBreaksWithSpaces(input)
+                        title = singleLine
+                        val normalized = ValidationUtils.normalizeTitle(singleLine)
+                        titleError = when {
+                            normalized.length > ValidationUtils.MAX_TITLE_LENGTH ->
+                                "Title cannot exceed ${ValidationUtils.MAX_TITLE_LENGTH} characters (${normalized.length}/${ValidationUtils.MAX_TITLE_LENGTH})"
+                            titleError != null && normalized.isNotBlank() && normalized.length <= ValidationUtils.MAX_TITLE_LENGTH ->
+                                null
+                            else -> titleError
+                        }
                     },
                     label = "TITLE *",
                     placeholder = "e.g. Washing machine",
+                    singleLine = true,
                     errorMessage = titleError,
+                    helperText = "Short product name, for example Washing machine. Put longer details in Notes.",
+                    counterText = if (title.length >= 40) "${title.length}/${ValidationUtils.MAX_TITLE_LENGTH}" else null,
+                    textFieldModifier = Modifier.focusRequester(titleFocusRequester),
                     testTag = "input_title"
                 )
             }
@@ -836,7 +865,8 @@ fun AddInvoiceScreen(
                     value = notes,
                     onValueChange = { notes = it },
                     label = "NOTES (OPTIONAL)",
-                    placeholder = "Coverage details, service center info, or claim instructions...",
+                    placeholder = "Coverage details, pasted invoice tables, service center info...",
+                    helperText = "Paste detailed descriptions, specifications, or invoice tables here.",
                     singleLine = false,
                     testTag = "input_notes"
                 )

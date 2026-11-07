@@ -265,4 +265,24 @@ class InvoiceRepository(
         reminderDao.deleteRemindersForItem(itemId)
         itemDao.deleteItemById(itemId)
     }
+
+    /**
+     * Updates the warranty start date of an existing item and recalculates its expiry date
+     * and reminder schedule immediately.
+     */
+    suspend fun updateWarrantyStartDate(itemId: Long, newStartDateMillis: Long) {
+        val item = itemDao.getItemById(itemId) ?: return
+        val computedExpiry = DateUtils.calculateExpiryDate(
+            startDateMillis = newStartDateMillis,
+            warrantyValue = item.warrantyValue,
+            warrantyUnit = item.warrantyUnit
+        )
+        val updated = item.copy(
+            warrantyStartDate = newStartDateMillis,
+            expiryDate = computedExpiry,
+            updatedAt = System.currentTimeMillis()
+        )
+        itemDao.updateItem(updated)
+        rescheduleReminders(itemId = itemId, expiryDate = computedExpiry)
+    }
 }

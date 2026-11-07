@@ -1,9 +1,13 @@
 package com.example.ui.screens
 
+import android.app.DatePickerDialog
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import java.time.Instant
+import java.time.ZoneId
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -228,17 +232,70 @@ fun InvoiceDetailScreen(
                                 label = "WARRANTY DURATION",
                                 value = "${item.warrantyValue} ${item.warrantyUnit}"
                             )
-                            DetailMetaRow(
-                                label = "WARRANTY START",
-                                value = DateUtils.formatDate(item.warrantyStartDate)
-                            )
-                            DetailMetaRow(
-                                label = "EXPIRY DATE",
-                                value = DateUtils.formatDate(item.expiryDate)
-                            )
-                        } else {
-                            DetailMetaRow(label = "WARRANTY / EXPIRY", value = "NONE")
                         }
+
+                        // WARRANTY START (Editable)
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(4.dp))
+                                .clickable {
+                                    val startMillis = item.warrantyStartDate ?: item.purchaseDate
+                                    val localDate = Instant.ofEpochMilli(startMillis)
+                                        .atZone(ZoneId.systemDefault())
+                                        .toLocalDate()
+                                    DatePickerDialog(
+                                        context,
+                                        { _, year, monthZeroBased, dayOfMonth ->
+                                            val pickedMillis = DateUtils.localDateToMillis(year, monthZeroBased + 1, dayOfMonth)
+                                            viewModel.updateWarrantyStartDate(item.id, pickedMillis)
+                                        },
+                                        localDate.year,
+                                        localDate.monthValue - 1,
+                                        localDate.dayOfMonth
+                                    ).show()
+                                }
+                                .padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(
+                                    text = "WARRANTY START",
+                                    style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Icon(
+                                    imageVector = Icons.Default.Edit,
+                                    contentDescription = "Edit warranty start date",
+                                    modifier = Modifier.size(14.dp),
+                                    tint = NothingRed
+                                )
+                            }
+                            Text(
+                                text = DateUtils.formatDate(item.warrantyStartDate ?: item.purchaseDate),
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontFamily = SpaceGroteskFontFamily,
+                                    fontWeight = FontWeight.Bold
+                                ),
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                        }
+                        Text(
+                            text = "Use the delivery date if it differs from purchase.",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontFamily = SpaceGroteskFontFamily,
+                                fontSize = 11.sp
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 6.dp)
+                        )
+
+                        DetailMetaRow(
+                            label = "EXPIRY",
+                            value = if (item.expiryDate != null) DateUtils.formatDate(item.expiryDate) else "NONE"
+                        )
 
                         NothingDivider(modifier = Modifier.padding(vertical = 4.dp))
 
