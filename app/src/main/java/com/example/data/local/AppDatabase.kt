@@ -89,6 +89,9 @@ interface ItemDao {
 
     @Query("DELETE FROM items WHERE id = :id")
     suspend fun deleteItemById(id: Long)
+
+    @Query("DELETE FROM items WHERE invoiceNumber IN ('FK-IN-2026-88492', 'CR-2026-44109', 'AZ-2025-1120')")
+    suspend fun deleteLegacyDummyItems()
 }
 
 @Dao

@@ -92,7 +92,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     init {
         viewModelScope.launch {
-            repository.seedSampleDataIfEmpty()
+            repository.ensureDefaultCategories()
         }
     }
 

@@ -63,6 +63,7 @@ class InvoiceRepository(
     }
 
     suspend fun ensureDefaultCategories(): List<Category> {
+        itemDao.deleteLegacyDummyItems()
         val existing = categoryDao.getAllCategoriesList()
         if (existing.isNotEmpty()) return existing
 
@@ -263,96 +264,5 @@ class InvoiceRepository(
         }
         reminderDao.deleteRemindersForItem(itemId)
         itemDao.deleteItemById(itemId)
-    }
-
-    suspend fun seedSampleDataIfEmpty() {
-        val categories = ensureDefaultCategories()
-        if (itemDao.getItemCount() > 0) return
-
-        val electronicsId = categories.find { it.name == "ELECTRONICS" }?.id ?: categories.first().id
-        val vehicleId = categories.find { it.name == "VEHICLE" }?.id ?: categories.first().id
-        val shoppingId = categories.find { it.name == "SHOPPING" }?.id ?: categories.first().id
-
-        val now = System.currentTimeMillis()
-        val fiveMonthsAgo = now - TimeUnit.DAYS.toMillis(165)
-        val oneMonthAgo = now - TimeUnit.DAYS.toMillis(30)
-        val thirteenMonthsAgo = now - TimeUnit.DAYS.toMillis(400)
-
-        // Item 1: Expiring Soon (Nothing Phone 2a)
-        val expiry1 = DateUtils.calculateExpiryDate(fiveMonthsAgo, 6, WarrantyUnit.MONTHS)
-        val item1Id = itemDao.insertItem(
-            Item(
-                title = "Nothing Phone (2a) 5G",
-                categoryId = electronicsId,
-                sellerName = "Flipkart Internet Pvt Ltd",
-                invoiceNumber = "FK-IN-2026-88492",
-                orderId = "OD309485720194820",
-                purchaseDate = fiveMonthsAgo,
-                amount = 23999.0,
-                warrantyValue = 6,
-                warrantyUnit = WarrantyUnit.MONTHS,
-                warrantyStartDate = fiveMonthsAgo,
-                expiryDate = expiry1,
-                notes = "Extended protection plan included"
-            )
-        )
-        customFieldDao.insertCustomFields(
-            listOf(
-                CustomField(itemId = item1Id, name = "IMEI", type = CustomFieldType.TEXT, value = "359018293847102", sortOrder = 0),
-                CustomField(itemId = item1Id, name = "Extended Care", type = CustomFieldType.YES_NO, value = "YES", sortOrder = 1)
-            )
-        )
-        rescheduleReminders(item1Id, expiry1)
-
-        // Item 2: Active (Washing Machine)
-        val expiry2 = DateUtils.calculateExpiryDate(oneMonthAgo, 2, WarrantyUnit.YEARS)
-        val item2Id = itemDao.insertItem(
-            Item(
-                title = "LG Front Load Washing Machine",
-                categoryId = shoppingId,
-                sellerName = "Croma Electronics",
-                invoiceNumber = "CR-2026-44109",
-                orderId = "ORD-99281",
-                purchaseDate = oneMonthAgo,
-                amount = 34990.0,
-                warrantyValue = 2,
-                warrantyUnit = WarrantyUnit.YEARS,
-                warrantyStartDate = oneMonthAgo,
-                expiryDate = expiry2,
-                notes = "2 years comprehensive + 10 years motor warranty"
-            )
-        )
-        customFieldDao.insertCustomFields(
-            listOf(
-                CustomField(itemId = item2Id, name = "Serial Number", type = CustomFieldType.TEXT, value = "LGWM2026X99", sortOrder = 0),
-                CustomField(itemId = item2Id, name = "Capacity (kg)", type = CustomFieldType.NUMBER, value = "8", sortOrder = 1)
-            )
-        )
-        rescheduleReminders(item2Id, expiry2)
-
-        // Item 3: Expired (Vehicle Insurance / Battery)
-        val expiry3 = DateUtils.calculateExpiryDate(thirteenMonthsAgo, 12, WarrantyUnit.MONTHS)
-        val item3Id = itemDao.insertItem(
-            Item(
-                title = "Amaron Pro Bike Battery",
-                categoryId = vehicleId,
-                sellerName = "AutoZone Service Center",
-                invoiceNumber = "AZ-2025-1120",
-                orderId = "",
-                purchaseDate = thirteenMonthsAgo,
-                amount = 1850.0,
-                warrantyValue = 12,
-                warrantyUnit = WarrantyUnit.MONTHS,
-                warrantyStartDate = thirteenMonthsAgo,
-                expiryDate = expiry3,
-                notes = "Free replacement warranty period ended"
-            )
-        )
-        customFieldDao.insertCustomFields(
-            listOf(
-                CustomField(itemId = item3Id, name = "Battery Code", type = CustomFieldType.TEXT, value = "AM-PRO-9912", sortOrder = 0)
-            )
-        )
-        rescheduleReminders(item3Id, expiry3)
     }
 }
