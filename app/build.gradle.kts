@@ -1,4 +1,5 @@
 import com.google.gms.googleservices.GoogleServicesPlugin.MissingGoogleServicesStrategy
+import java.security.KeyStore
 
 plugins {
   alias(libs.plugins.android.application)
@@ -41,19 +42,34 @@ android {
       val releaseKeyPassword = providers.environmentVariable("KEY_PASSWORD").orNull
       val keystoreFile = if (!keystorePath.isNullOrBlank()) file(keystorePath) else null
 
-      if (keystoreFile != null &&
-          keystoreFile.exists() &&
-          !keystorePassword.isNullOrBlank() &&
-          !releaseKeyAlias.isNullOrBlank() &&
-          !releaseKeyPassword.isNullOrBlank()
-      ) {
+      val isValidReleaseKeystore =
+          if (keystoreFile != null &&
+              keystoreFile.exists() &&
+              keystoreFile.length() > 0L &&
+              !keystorePassword.isNullOrBlank() &&
+              !releaseKeyAlias.isNullOrBlank() &&
+              !releaseKeyPassword.isNullOrBlank()
+          ) {
+            runCatching {
+                  val ks = KeyStore.getInstance(KeyStore.getDefaultType())
+                  keystoreFile.inputStream().use { stream ->
+                    ks.load(stream, keystorePassword.toCharArray())
+                  }
+                  ks.getKey(releaseKeyAlias, releaseKeyPassword.toCharArray()) != null
+                }
+                .getOrDefault(false)
+          } else {
+            false
+          }
+
+      if (isValidReleaseKeystore && keystoreFile != null) {
         storeFile = keystoreFile
         storePassword = keystorePassword
         keyAlias = releaseKeyAlias
         keyPassword = releaseKeyPassword
       } else {
         println(
-            "WARNING: Release signing environment variables (KEYSTORE_PATH, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD) are missing or keystore file was not found. Falling back to debug signing config."
+            "WARNING: Release signing environment variables (KEYSTORE_PATH, KEYSTORE_PASSWORD, KEY_ALIAS, KEY_PASSWORD) are missing or keystore file was not found/valid. Falling back to debug signing config."
         )
         val debugKeystore = file("${rootDir}/debug.keystore")
         if (debugKeystore.exists()) {
