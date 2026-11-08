@@ -40,6 +40,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import com.example.ui.screens.AddInvoiceScreen
+import com.example.ui.screens.AskAiChatScreen
 import com.example.ui.screens.HomeScreen
 import com.example.ui.screens.InvoiceDetailScreen
 import com.example.ui.screens.RemindersTimelineScreen
@@ -52,6 +53,7 @@ object Routes {
     const val HOME = "home"
     const val TIMELINE = "timeline"
     const val SETTINGS = "settings"
+    const val ASK_AI = "ask_ai"
     const val ADD = "add"
     const val EDIT = "edit/{id}"
     const val DETAIL = "detail/{id}"
@@ -166,8 +168,16 @@ fun MainNavGraph(
                     HomeScreen(
                         viewModel = viewModel,
                         onAddItemClick = { navController.navigate(Routes.ADD) },
+                        onAskAiClick = { navController.navigate(Routes.ASK_AI) },
                         onItemClick = { id -> navController.navigate(Routes.detailRoute(id)) },
                         onEditItem = { id -> navController.navigate(Routes.editRoute(id)) }
+                    )
+                }
+
+                composable(Routes.ASK_AI) {
+                    AskAiChatScreen(
+                        viewModel = viewModel,
+                        onClose = { navController.popBackStack() }
                     )
                 }
 

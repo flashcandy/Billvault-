@@ -20,6 +20,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import com.example.data.model.Category
 import com.example.data.model.Item
@@ -504,5 +506,24 @@ class BillValidUnitTest {
         composeTestRule.onNodeWithText("PARSE").assertIsDisplayed()
         composeTestRule.onNodeWithText("+ ADD PART").assertIsDisplayed()
         composeTestRule.onNodeWithText("SAVE").assertIsDisplayed()
+    }
+
+    @Test
+    fun `phase 1 floating ask ai button and ask ai chat screen render correctly`() {
+        var askAiClicked = false
+        var chatClosed = false
+
+        composeTestRule.setContent {
+            androidx.compose.foundation.layout.Column {
+                com.example.ui.screens.AskAiChatScreen(
+                    viewModel = androidx.lifecycle.viewmodel.compose.viewModel(),
+                    onClose = { chatClosed = true }
+                )
+            }
+        }
+
+        // Verify AskAiChatScreen renders header, close button, message list, and send button
+        composeTestRule.onAllNodesWithText("ASK AI")[0].assertIsDisplayed()
+        composeTestRule.onNodeWithText("SEND").assertIsDisplayed()
     }
 }

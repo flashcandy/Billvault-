@@ -20,10 +20,13 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForwardIos
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.FloatingActionButton
@@ -68,6 +71,7 @@ import com.example.utils.DateUtils
 fun HomeScreen(
     viewModel: MainViewModel,
     onAddItemClick: () -> Unit,
+    onAskAiClick: () -> Unit = {},
     onItemClick: (Long) -> Unit,
     onEditItem: (Long) -> Unit = {}
 ) {
@@ -100,28 +104,76 @@ fun HomeScreen(
 
     Scaffold(
         floatingActionButton = {
-            FloatingActionButton(
-                onClick = onAddItemClick,
-                containerColor = NothingRed,
-                contentColor = Color.White,
-                shape = RoundedCornerShape(12.dp),
-                modifier = Modifier
-                    .testTag("home_add_button")
-                    .padding(bottom = 16.dp)
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier.padding(bottom = 16.dp)
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(imageVector = Icons.Default.Add, contentDescription = "Add Bill")
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = "ADD BILL",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.Bold,
-                            letterSpacing = 1.5.sp
+                val askAiInteractionSource = remember { MutableInteractionSource() }
+                val isAskAiPressed by askAiInteractionSource.collectIsPressedAsState()
+
+                Box(
+                    modifier = Modifier
+                        .testTag("home_ask_ai_button")
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color.Black.copy(alpha = if (isAskAiPressed) 1.0f else 0.7f))
+                        .border(1.dp, Color.White.copy(alpha = 0.4f), RoundedCornerShape(12.dp))
+                        .clickable(
+                            interactionSource = askAiInteractionSource,
+                            indication = null,
+                            onClick = onAskAiClick
                         )
-                    )
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(6.dp)
+                                .clip(CircleShape)
+                                .background(NothingRed)
+                        )
+                        Icon(
+                            imageVector = Icons.Default.AutoAwesome,
+                            contentDescription = "Ask AI Assistant",
+                            tint = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Text(
+                            text = "ASK AI",
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontFamily = DotoFontFamily,
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.5.sp
+                            ),
+                            color = Color.White
+                        )
+                    }
+                }
+
+                FloatingActionButton(
+                    onClick = onAddItemClick,
+                    containerColor = NothingRed,
+                    contentColor = Color.White,
+                    shape = RoundedCornerShape(12.dp),
+                    modifier = Modifier.testTag("home_add_button")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(imageVector = Icons.Default.Add, contentDescription = "Add Bill")
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = "ADD BILL",
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.5.sp
+                            )
+                        )
+                    }
                 }
             }
         },
