@@ -12,3 +12,9 @@
 -keep class com.example.worker.ExpiryReminderWorker {
     public <init>(android.content.Context, androidx.work.WorkerParameters);
 }
+
+# Ignore missing compile-time annotations used by Google Tink / Security Crypto
+-dontwarn com.google.errorprone.annotations.**
+-dontwarn javax.annotation.**
+-dontwarn com.google.crypto.tink.**
+
