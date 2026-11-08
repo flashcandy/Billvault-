@@ -20,6 +20,7 @@ import com.example.data.model.CustomFieldTemplate
 import com.example.data.model.Item
 import com.example.data.model.ItemWithDetails
 import com.example.data.model.Reminder
+import com.example.data.model.WarrantyPart
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -55,7 +56,7 @@ interface CategoryDao {
 @Dao
 interface ItemDao {
     @Transaction
-    @Query("SELECT * FROM items ORDER BY COALESCE(expiryDate, 9223372036854775807) ASC, purchaseDate DESC")
+    @Query("SELECT * FROM items ORDER BY COALESCE((SELECT MIN(expiryDate) FROM warranty_parts WHERE itemId = items.id), 9223372036854775807) ASC, purchaseDate DESC")
     fun getAllItemsWithDetails(): Flow<List<ItemWithDetails>>
 
     @Transaction
@@ -69,7 +70,7 @@ interface ItemDao {
     @Query("SELECT * FROM items WHERE id = :id")
     suspend fun getItemById(id: Long): Item?
 
-    @Query("SELECT * FROM items ORDER BY COALESCE(expiryDate, 9223372036854775807) ASC")
+    @Query("SELECT * FROM items ORDER BY COALESCE((SELECT MIN(expiryDate) FROM warranty_parts WHERE itemId = items.id), 9223372036854775807) ASC")
     fun getAllItems(): Flow<List<Item>>
 
     @Query("SELECT COUNT(*) FROM items")
@@ -143,6 +144,39 @@ interface AttachmentDao {
 }
 
 @Dao
+interface WarrantyPartDao {
+    @Query("SELECT * FROM warranty_parts WHERE itemId = :itemId ORDER BY sortOrder ASC, id ASC")
+    fun getWarrantyPartsForItem(itemId: Long): Flow<List<WarrantyPart>>
+
+    @Query("SELECT * FROM warranty_parts WHERE itemId = :itemId ORDER BY sortOrder ASC, id ASC")
+    suspend fun getWarrantyPartsForItemOnce(itemId: Long): List<WarrantyPart>
+
+    @Query("SELECT * FROM warranty_parts WHERE id = :id")
+    suspend fun getPartById(id: Long): WarrantyPart?
+
+    @Query("SELECT * FROM warranty_parts ORDER BY expiryDate ASC")
+    fun getAllWarrantyParts(): Flow<List<WarrantyPart>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertWarrantyPart(part: WarrantyPart): Long
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertWarrantyParts(parts: List<WarrantyPart>): List<Long>
+
+    @Update
+    suspend fun updateWarrantyPart(part: WarrantyPart)
+
+    @Delete
+    suspend fun deleteWarrantyPart(part: WarrantyPart)
+
+    @Query("DELETE FROM warranty_parts WHERE id = :id")
+    suspend fun deleteWarrantyPartById(id: Long)
+
+    @Query("DELETE FROM warranty_parts WHERE itemId = :itemId")
+    suspend fun deleteWarrantyPartsForItem(itemId: Long)
+}
+
+@Dao
 interface ReminderDao {
     @Query("SELECT * FROM reminders WHERE isSent = 0 ORDER BY reminderDate ASC")
     fun getPendingReminders(): Flow<List<Reminder>>
@@ -152,6 +186,9 @@ interface ReminderDao {
 
     @Query("SELECT * FROM reminders WHERE itemId = :itemId ORDER BY daysBefore DESC")
     fun getRemindersForItem(itemId: Long): Flow<List<Reminder>>
+
+    @Query("SELECT * FROM reminders WHERE partId = :partId ORDER BY daysBefore DESC")
+    fun getRemindersForPart(partId: Long): Flow<List<Reminder>>
 
     @Query("SELECT * FROM reminders WHERE itemId = :itemId ORDER BY daysBefore DESC")
     suspend fun getRemindersForItemOnce(itemId: Long): List<Reminder>
@@ -167,23 +204,28 @@ interface ReminderDao {
 
     @Query("DELETE FROM reminders WHERE itemId = :itemId")
     suspend fun deleteRemindersForItem(itemId: Long)
+
+    @Query("DELETE FROM reminders WHERE partId = :partId")
+    suspend fun deleteRemindersForPart(partId: Long)
 }
 
 @Database(
     entities = [
         Category::class,
         Item::class,
+        WarrantyPart::class,
         CustomField::class,
         CustomFieldTemplate::class,
         Attachment::class,
         Reminder::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
     abstract fun categoryDao(): CategoryDao
     abstract fun itemDao(): ItemDao
+    abstract fun warrantyPartDao(): WarrantyPartDao
     abstract fun customFieldDao(): CustomFieldDao
     abstract fun attachmentDao(): AttachmentDao
     abstract fun reminderDao(): ReminderDao
@@ -359,6 +401,124 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("PRAGMA foreign_keys = OFF")
+
+                // 1. Create warranty_parts table
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `warranty_parts` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `itemId` INTEGER NOT NULL,
+                        `label` TEXT NOT NULL,
+                        `durationValue` INTEGER NOT NULL,
+                        `durationUnit` TEXT NOT NULL,
+                        `startDate` INTEGER NOT NULL,
+                        `expiryDate` INTEGER NOT NULL,
+                        `sortOrder` INTEGER NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL,
+                        FOREIGN KEY(`itemId`) REFERENCES `items`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_warranty_parts_itemId` ON `warranty_parts` (`itemId`)")
+
+                // 2. Move existing warranty data from items into warranty_parts labeled "Warranty"
+                db.execSQL(
+                    """
+                    INSERT INTO `warranty_parts` (
+                        `itemId`, `label`, `durationValue`, `durationUnit`,
+                        `startDate`, `expiryDate`, `sortOrder`, `createdAt`, `updatedAt`
+                    )
+                    SELECT
+                        `id`,
+                        'Warranty',
+                        `warrantyValue`,
+                        `warrantyUnit`,
+                        `warrantyStartDate`,
+                        COALESCE(`expiryDate`, `warrantyStartDate`),
+                        0,
+                        `createdAt`,
+                        `updatedAt`
+                    FROM `items`
+                    WHERE `warrantyValue` IS NOT NULL AND `warrantyValue` > 0
+                    """.trimIndent()
+                )
+
+                // 3. Recreate reminders table with partId column referencing warranty_parts(id)
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `reminders_new` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `itemId` INTEGER NOT NULL,
+                        `partId` INTEGER,
+                        `reminderDate` INTEGER NOT NULL,
+                        `daysBefore` INTEGER NOT NULL,
+                        `isSent` INTEGER NOT NULL,
+                        FOREIGN KEY(`itemId`) REFERENCES `items`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE,
+                        FOREIGN KEY(`partId`) REFERENCES `warranty_parts`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO `reminders_new` (`id`, `itemId`, `partId`, `reminderDate`, `daysBefore`, `isSent`)
+                    SELECT
+                        r.`id`,
+                        r.`itemId`,
+                        (SELECT wp.`id` FROM `warranty_parts` wp WHERE wp.`itemId` = r.`itemId` LIMIT 1),
+                        r.`reminderDate`,
+                        r.`daysBefore`,
+                        r.`isSent`
+                    FROM `reminders` r
+                    """.trimIndent()
+                )
+                db.execSQL("DROP TABLE `reminders`")
+                db.execSQL("ALTER TABLE `reminders_new` RENAME TO `reminders`")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_reminders_itemId` ON `reminders` (`itemId`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_reminders_partId` ON `reminders` (`partId`)")
+
+                // 4. Recreate items table without the single warranty fields
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `items_new` (
+                        `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `categoryId` INTEGER NOT NULL,
+                        `sellerName` TEXT NOT NULL,
+                        `invoiceNumber` TEXT NOT NULL,
+                        `orderId` TEXT NOT NULL,
+                        `purchaseDate` INTEGER NOT NULL,
+                        `amount` REAL,
+                        `notes` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `updatedAt` INTEGER NOT NULL,
+                        FOREIGN KEY(`categoryId`) REFERENCES `categories`(`id`) ON UPDATE NO ACTION ON DELETE RESTRICT
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO `items_new` (
+                        `id`, `title`, `categoryId`, `sellerName`, `invoiceNumber`,
+                        `orderId`, `purchaseDate`, `amount`, `notes`, `createdAt`, `updatedAt`
+                    )
+                    SELECT
+                        `id`, `title`, `categoryId`, `sellerName`, `invoiceNumber`,
+                        `orderId`, `purchaseDate`, `amount`, `notes`, `createdAt`, `updatedAt`
+                    FROM `items`
+                    """.trimIndent()
+                )
+                db.execSQL("DROP TABLE `items`")
+                db.execSQL("ALTER TABLE `items_new` RENAME TO `items`")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_items_categoryId` ON `items` (`categoryId`)")
+
+                db.execSQL("PRAGMA foreign_keys = ON")
+            }
+        }
+
         fun getDatabase(context: Context): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val appContext = context.applicationContext
@@ -368,7 +528,7 @@ abstract class AppDatabase : RoomDatabase() {
                         AppDatabase::class.java,
                         "bill_valid_database"
                     )
-                        .addMigrations(MIGRATION_1_2)
+                        .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                         .build()
                     // Verify schema integrity by opening writable database
                     db.openHelper.writableDatabase
@@ -383,7 +543,7 @@ abstract class AppDatabase : RoomDatabase() {
                         AppDatabase::class.java,
                         "bill_valid_database"
                     )
-                        .addMigrations(MIGRATION_1_2)
+                        .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                         .build()
                 }
                 INSTANCE = instance

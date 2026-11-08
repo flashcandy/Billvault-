@@ -24,6 +24,7 @@ import androidx.compose.ui.test.onNodeWithText
 import com.example.data.model.Category
 import com.example.data.model.Item
 import com.example.data.model.ItemWithDetails
+import com.example.data.model.WarrantyPart
 import com.example.ui.screens.ItemRowCard
 import org.junit.Rule
 import java.time.ZoneId
@@ -306,20 +307,26 @@ class BillValidUnitTest {
             orderId = "OD-98765",
             purchaseDate = 1700000000000,
             amount = 25000.0,
-            warrantyValue = 1,
-            warrantyUnit = "YEARS",
-            warrantyStartDate = 1700000000000,
-            expiryDate = 1731536000000,
             notes = "Invoice note",
             createdAt = 1700000000000,
             updatedAt = 1700000000000
         )
         val category = Category(id = 1, name = "ELECTRONICS", isDefault = true)
+        val warrantyPart = WarrantyPart(
+            id = 1,
+            itemId = 1,
+            label = "Warranty",
+            durationValue = 1,
+            durationUnit = "YEARS",
+            startDate = 1700000000000,
+            expiryDate = 1731536000000
+        )
         val details = ItemWithDetails(
             item = item,
             category = category,
             customFields = emptyList(),
             attachments = emptyList(),
+            warrantyParts = listOf(warrantyPart),
             reminders = emptyList()
         )
 
@@ -330,5 +337,172 @@ class BillValidUnitTest {
         // Verify the component renders and displays the category/seller and amount
         composeTestRule.onNodeWithText("ELECTRONICS • Flipkart").assertIsDisplayed()
         composeTestRule.onNodeWithText(DateUtils.formatCurrency(25000.0)).assertIsDisplayed()
+    }
+
+    @Test
+    fun `room migration 2 to 3 creates warranty_parts and moves existing warranty data`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val dbName = "migration_test_v2_to_v3.db"
+        context.deleteDatabase(dbName)
+
+        val config = SupportSQLiteOpenHelper.Configuration.builder(context)
+            .name(dbName)
+            .callback(object : SupportSQLiteOpenHelper.Callback(2) {
+                override fun onCreate(db: SupportSQLiteDatabase) {
+                    db.execSQL(
+                        """
+                        CREATE TABLE IF NOT EXISTS `categories` (
+                            `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                            `name` TEXT NOT NULL,
+                            `isDefault` INTEGER NOT NULL,
+                            `colorMarker` TEXT NOT NULL,
+                            `sortOrder` INTEGER NOT NULL
+                        )
+                        """.trimIndent()
+                    )
+                    db.execSQL(
+                        """
+                        CREATE TABLE IF NOT EXISTS `items` (
+                            `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                            `title` TEXT NOT NULL,
+                            `categoryId` INTEGER NOT NULL,
+                            `sellerName` TEXT NOT NULL,
+                            `invoiceNumber` TEXT NOT NULL,
+                            `orderId` TEXT NOT NULL,
+                            `purchaseDate` INTEGER NOT NULL,
+                            `amount` REAL,
+                            `warrantyValue` INTEGER,
+                            `warrantyUnit` TEXT NOT NULL,
+                            `warrantyStartDate` INTEGER NOT NULL,
+                            `expiryDate` INTEGER,
+                            `notes` TEXT NOT NULL,
+                            `createdAt` INTEGER NOT NULL,
+                            `updatedAt` INTEGER NOT NULL
+                        )
+                        """.trimIndent()
+                    )
+                    db.execSQL(
+                        """
+                        CREATE TABLE IF NOT EXISTS `reminders` (
+                            `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                            `itemId` INTEGER NOT NULL,
+                            `reminderDate` INTEGER NOT NULL,
+                            `daysBefore` INTEGER NOT NULL,
+                            `isSent` INTEGER NOT NULL
+                        )
+                        """.trimIndent()
+                    )
+                }
+
+                override fun onUpgrade(db: SupportSQLiteDatabase, oldVersion: Int, newVersion: Int) {}
+            })
+            .build()
+
+        val helper = FrameworkSQLiteOpenHelperFactory().create(config)
+        val db = helper.writableDatabase
+
+        // Insert v2 item with warranty and reminder
+        db.execSQL(
+            """
+            INSERT INTO `items` (`id`, `title`, `categoryId`, `sellerName`, `invoiceNumber`, `orderId`, `purchaseDate`, `amount`, `warrantyValue`, `warrantyUnit`, `warrantyStartDate`, `expiryDate`, `notes`, `createdAt`, `updatedAt`)
+            VALUES (101, 'Washing Machine', 1, 'Samsung Store', 'SS-100', 'OD-99', 1700000000000, 32000.0, 2, 'YEARS', 1700000000000, 1763078400000, 'Motor test note', 1700000000000, 1700000000000)
+            """.trimIndent()
+        )
+        db.execSQL(
+            """
+            INSERT INTO `reminders` (`id`, `itemId`, `reminderDate`, `daysBefore`, `isSent`)
+            VALUES (201, 101, 1760486400000, 30, 0)
+            """.trimIndent()
+        )
+
+        // Execute MIGRATION_2_3
+        AppDatabase.MIGRATION_2_3.migrate(db)
+
+        // 1. Verify warranty_parts created with label 'Warranty' and data migrated
+        db.query("SELECT `id`, `itemId`, `label`, `durationValue`, `durationUnit`, `startDate`, `expiryDate` FROM `warranty_parts` WHERE `itemId` = 101").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            val partId = cursor.getLong(0)
+            assertEquals(101L, cursor.getLong(1))
+            assertEquals("Warranty", cursor.getString(2))
+            assertEquals(2, cursor.getInt(3))
+            assertEquals("YEARS", cursor.getString(4))
+            assertEquals(1700000000000L, cursor.getLong(5))
+            assertEquals(1763078400000L, cursor.getLong(6))
+
+            // 2. Verify reminders table has partId linked to the new warranty part
+            db.query("SELECT `id`, `itemId`, `partId`, `daysBefore` FROM `reminders` WHERE `itemId` = 101").use { rCursor ->
+                assertTrue(rCursor.moveToFirst())
+                assertEquals(201L, rCursor.getLong(0))
+                assertEquals(101L, rCursor.getLong(1))
+                assertEquals(partId, rCursor.getLong(2))
+                assertEquals(30, rCursor.getInt(3))
+            }
+        }
+
+        // 3. Verify items table has removed warranty columns
+        db.query("SELECT `title`, `amount` FROM `items` WHERE `id` = 101").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("Washing Machine", cursor.getString(0))
+            assertEquals(32000.0, cursor.getDouble(1), 0.001)
+        }
+
+        db.close()
+        context.deleteDatabase(dbName)
+    }
+
+    @Test
+    fun `month end and leap year expiry calculations handle all units`() {
+        // Jan 31, 2024 (leap year) + 1 month -> Feb 29, 2024
+        val leapJan31 = DateUtils.localDateToMillis(2024, 1, 31, testZone)
+        val leapFeb29 = DateUtils.calculateExpiryDate(leapJan31, 1, WarrantyUnit.MONTHS, testZone)
+        assertEquals(DateUtils.localDateToMillis(2024, 2, 29, testZone), leapFeb29)
+
+        // Feb 29, 2024 + 1 year -> Feb 28, 2025 (non-leap year)
+        val nextYearNonLeap = DateUtils.calculateExpiryDate(leapFeb29!!, 1, WarrantyUnit.YEARS, testZone)
+        assertEquals(DateUtils.localDateToMillis(2025, 2, 28, testZone), nextYearNonLeap)
+
+        // Aug 31, 2025 + 1 month -> Sep 30, 2025 (30-day month)
+        val aug31 = DateUtils.localDateToMillis(2025, 8, 31, testZone)
+        val sep30 = DateUtils.calculateExpiryDate(aug31, 1, WarrantyUnit.MONTHS, testZone)
+        assertEquals(DateUtils.localDateToMillis(2025, 9, 30, testZone), sep30)
+    }
+
+    @Test
+    fun `nothing buttons render with explicit content descriptions and support 200 percent font scale`() {
+        composeTestRule.setContent {
+            androidx.compose.runtime.CompositionLocalProvider(
+                androidx.compose.ui.platform.LocalDensity provides androidx.compose.ui.unit.Density(
+                    density = androidx.compose.ui.platform.LocalDensity.current.density,
+                    fontScale = 2.0f
+                )
+            ) {
+                androidx.compose.foundation.layout.Column {
+                    com.example.ui.components.NothingButton(
+                        text = "PARSE",
+                        onClick = {},
+                        contentDescription = "Parse warranty description text into structured parts",
+                        testTag = "warranty_parse_button"
+                    )
+                    com.example.ui.components.NothingButton(
+                        text = "+ ADD PART",
+                        isPrimary = false,
+                        onClick = {},
+                        contentDescription = "Add a new warranty part manually",
+                        testTag = "warranty_add_part_button"
+                    )
+                    com.example.ui.components.NothingButton(
+                        text = "SAVE",
+                        onClick = {},
+                        contentDescription = "Save bill item and warranty parts",
+                        testTag = "add_save_button"
+                    )
+                }
+            }
+        }
+
+        // Verify PARSE, + ADD PART, and SAVE nodes rendered successfully at 200% font scale
+        composeTestRule.onNodeWithText("PARSE").assertIsDisplayed()
+        composeTestRule.onNodeWithText("+ ADD PART").assertIsDisplayed()
+        composeTestRule.onNodeWithText("SAVE").assertIsDisplayed()
     }
 }

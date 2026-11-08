@@ -12,11 +12,14 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -182,6 +185,7 @@ fun NothingButton(
     isPrimary: Boolean = true,
     enabled: Boolean = true,
     icon: ImageVector? = null,
+    contentDescription: String? = null,
     testTag: String = ""
 ) {
     val backgroundColor = when {
@@ -205,20 +209,25 @@ fun NothingButton(
     Box(
         modifier = modifier
             .testTag(testTag)
+            .semantics {
+                if (contentDescription != null) {
+                    this.contentDescription = contentDescription
+                }
+            }
             .fillMaxWidth()
-            .height(50.dp)
+            .heightIn(min = 50.dp)
             .clip(RoundedCornerShape(6.dp))
             .background(backgroundColor)
             .border(1.dp, borderColor, RoundedCornerShape(6.dp))
             .clickable(enabled = enabled) { onClick() }
-            .padding(horizontal = 16.dp),
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         contentAlignment = Alignment.Center
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             if (icon != null) {
                 Icon(
                     imageVector = icon,
-                    contentDescription = null,
+                    contentDescription = contentDescription,
                     tint = contentColor,
                     modifier = Modifier.size(18.dp)
                 )

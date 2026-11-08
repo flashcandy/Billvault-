@@ -89,13 +89,13 @@ fun HomeScreen(
     }
 
     val expiringSoonItems = items.filter {
-        DateUtils.getExpiryStatus(it.item.expiryDate) == DateUtils.ExpiryStatus.EXPIRING_SOON
+        DateUtils.getExpiryStatus(it.effectiveExpiryDate) == DateUtils.ExpiryStatus.EXPIRING_SOON
     }
     val activeItems = items.filter {
-        DateUtils.getExpiryStatus(it.item.expiryDate) == DateUtils.ExpiryStatus.ACTIVE
+        DateUtils.getExpiryStatus(it.effectiveExpiryDate) == DateUtils.ExpiryStatus.ACTIVE
     }
     val expiredItems = items.filter {
-        DateUtils.getExpiryStatus(it.item.expiryDate) == DateUtils.ExpiryStatus.EXPIRED
+        DateUtils.getExpiryStatus(it.effectiveExpiryDate) == DateUtils.ExpiryStatus.EXPIRED
     }
 
     Scaffold(
@@ -438,8 +438,9 @@ fun ItemRowCard(
 ) {
     val item = details.item
     val category = details.category
-    val status = DateUtils.getExpiryStatus(item.expiryDate)
-    val daysRemaining = DateUtils.getDaysRemaining(item.expiryDate)
+    val effectiveExpiry = details.effectiveExpiryDate
+    val status = DateUtils.getExpiryStatus(effectiveExpiry)
+    val daysRemaining = DateUtils.getDaysRemaining(effectiveExpiry)
 
     Row(
         modifier = Modifier
@@ -590,8 +591,8 @@ fun ItemRowCard(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                val expDisplay = if (item.expiryDate != null) {
-                    "EXP: ${DateUtils.formatDate(item.expiryDate)}"
+                val expDisplay = if (effectiveExpiry != null) {
+                    "EXP: ${DateUtils.formatDate(effectiveExpiry)}"
                 } else {
                     "NO WARRANTY"
                 }

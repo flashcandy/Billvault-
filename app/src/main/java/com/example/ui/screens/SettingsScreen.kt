@@ -20,6 +20,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
@@ -52,11 +53,13 @@ import com.example.ui.components.NothingChip
 import com.example.ui.components.NothingDivider
 import com.example.ui.components.NothingHeader
 import com.example.ui.components.NothingMarkerDot
+import com.example.ui.components.NothingTextField
 import com.example.ui.theme.DotoFontFamily
 import com.example.ui.theme.NothingRed
 import com.example.ui.theme.SpaceGroteskFontFamily
 import com.example.ui.viewmodel.MainViewModel
 import com.example.utils.FileStorageHelper
+import com.example.utils.OpenRouterService
 
 @Composable
 fun SettingsScreen(
@@ -69,6 +72,8 @@ fun SettingsScreen(
 
     var currentTheme by remember { mutableStateOf(settings.themeMode) }
     var safFolderUri by remember { mutableStateOf(settings.safFolderUri) }
+    var openRouterApiKey by remember { mutableStateOf(settings.openRouterApiKey) }
+    var selectedAiModel by remember { mutableStateOf(settings.selectedAiModel) }
     var showClearDialog by remember { mutableStateOf(false) }
 
     var showCategoryDialog by remember { mutableStateOf(false) }
@@ -109,11 +114,162 @@ fun SettingsScreen(
             item {
                 NothingHeader(
                     title = "SETTINGS",
-                    subtitle = "Storage folders, categories, appearance, and vault data"
+                    subtitle = "AI provider, storage folders, categories, appearance, and vault data"
                 )
             }
 
-            // 1. Attachment Storage & SAF Backup Folder
+            // 1. AI Provider Section (OpenRouter API Key + Free Model Picker)
+            item {
+                Text(
+                    text = "AI PROVIDER",
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontFamily = DotoFontFamily,
+                        letterSpacing = 1.5.sp
+                    ),
+                    color = NothingRed,
+                    modifier = Modifier.testTag("settings_ai_provider_header")
+                )
+            }
+
+            item {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(MaterialTheme.colorScheme.surface)
+                        .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                        .padding(14.dp)
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        NothingTextField(
+                            value = openRouterApiKey,
+                            onValueChange = { updated ->
+                                openRouterApiKey = updated
+                                settings.openRouterApiKey = updated
+                            },
+                            label = "OPENROUTER API KEY",
+                            placeholder = "sk-or-v1-...",
+                            singleLine = true,
+                            testTag = "input_openrouter_api_key"
+                        )
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Your key stays on this device.",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontFamily = SpaceGroteskFontFamily
+                                ),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.testTag("text_key_stays_on_device")
+                            )
+
+                            if (openRouterApiKey.isNotBlank()) {
+                                NothingChip(
+                                    text = "CLEAR KEY",
+                                    isSelected = false,
+                                    onClick = {
+                                        openRouterApiKey = ""
+                                        settings.openRouterApiKey = ""
+                                    },
+                                    testTag = "button_clear_api_key"
+                                )
+                            }
+                        }
+
+                        NothingDivider(modifier = Modifier.padding(vertical = 2.dp))
+
+                        Text(
+                            text = "FREE OPENROUTER MODEL",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Bold,
+                                letterSpacing = 1.2.sp
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            OpenRouterService.FREE_MODELS.forEach { model ->
+                                val isSelected = selectedAiModel == model.id
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(
+                                            if (isSelected) NothingRed.copy(alpha = 0.12f)
+                                            else MaterialTheme.colorScheme.background
+                                        )
+                                        .border(
+                                            width = 1.dp,
+                                            color = if (isSelected) NothingRed else MaterialTheme.colorScheme.outline,
+                                            shape = RoundedCornerShape(6.dp)
+                                        )
+                                        .clickable {
+                                            selectedAiModel = model.id
+                                            settings.selectedAiModel = model.id
+                                        }
+                                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                                        .testTag("ai_model_${model.id}"),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(
+                                                if (isSelected) NothingRed
+                                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                            )
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = model.displayName,
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                fontFamily = SpaceGroteskFontFamily,
+                                                fontWeight = FontWeight.Bold
+                                            ),
+                                            color = MaterialTheme.colorScheme.onBackground
+                                        )
+                                        Text(
+                                            text = model.id,
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontFamily = DotoFontFamily,
+                                                fontSize = 9.sp
+                                            ),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    if (isSelected) {
+                                        Text(
+                                            text = "ACTIVE",
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                fontFamily = DotoFontFamily,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 9.sp
+                                            ),
+                                            color = NothingRed
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        Text(
+                            text = "Built-in fallback active: if the chosen model fails or is rate-limited, Bill Valid automatically tries the next free model in the fallback list.",
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                        )
+                    }
+                }
+            }
+
+            item { NothingDivider() }
+
+            // 2. Attachment Storage & SAF Backup Folder
             item {
                 Text(
                     text = "ATTACHMENT STORAGE & BACKUP",
@@ -183,7 +339,7 @@ fun SettingsScreen(
 
             item { NothingDivider() }
 
-            // 2. Categories Management
+            // 3. Categories Management
             item {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -264,7 +420,7 @@ fun SettingsScreen(
 
             item { NothingDivider() }
 
-            // 3. Appearance & Theme
+            // 4. Appearance & Theme
             item {
                 Text(
                     text = "APPEARANCE & THEME",
@@ -302,7 +458,7 @@ fun SettingsScreen(
 
             item { NothingDivider() }
 
-            // 4. Data Management
+            // 5. Data Management
             item {
                 Text(
                     text = "DATA MANAGEMENT",
@@ -386,6 +542,8 @@ fun SettingsScreen(
                         showClearDialog = false
                         viewModel.clearAllData()
                         safFolderUri = null
+                        openRouterApiKey = ""
+                        selectedAiModel = OpenRouterService.DEFAULT_MODEL_ID
                     },
                     modifier = Modifier.width(140.dp)
                 )

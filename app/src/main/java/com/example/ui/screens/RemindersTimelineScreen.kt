@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.model.Item
+import com.example.data.model.ItemWithDetails
 import com.example.ui.components.NothingDivider
 import com.example.ui.components.NothingHeader
 import com.example.ui.components.NothingStatusDot
@@ -48,11 +49,11 @@ fun RemindersTimelineScreen(
     viewModel: MainViewModel,
     onItemClick: (Long) -> Unit
 ) {
-    val items by viewModel.allItems.collectAsStateWithLifecycle()
+    val itemsWithDetails by viewModel.allItemsWithDetails.collectAsStateWithLifecycle()
 
-    val sortedItems = items
-        .filter { it.expiryDate != null && it.expiryDate > 0L }
-        .sortedBy { it.expiryDate }
+    val sortedItems = itemsWithDetails
+        .filter { it.effectiveExpiryDate != null && (it.effectiveExpiryDate ?: 0L) > 0L }
+        .sortedBy { it.effectiveExpiryDate }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background
@@ -98,10 +99,10 @@ fun RemindersTimelineScreen(
                     modifier = Modifier.fillMaxSize(),
                     verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(sortedItems, key = { it.id }) { item ->
+                    items(sortedItems, key = { it.item.id }) { details ->
                         ReminderTimelineCard(
-                            item = item,
-                            onClick = { onItemClick(item.id) }
+                            details = details,
+                            onClick = { onItemClick(details.item.id) }
                         )
                     }
                 }
@@ -112,11 +113,13 @@ fun RemindersTimelineScreen(
 
 @Composable
 fun ReminderTimelineCard(
-    item: Item,
+    details: ItemWithDetails,
     onClick: () -> Unit
 ) {
-    val status = DateUtils.getExpiryStatus(item.expiryDate)
-    val daysRemaining = DateUtils.getDaysRemaining(item.expiryDate) ?: 0L
+    val item = details.item
+    val effectiveExpiry = details.effectiveExpiryDate
+    val status = DateUtils.getExpiryStatus(effectiveExpiry)
+    val daysRemaining = DateUtils.getDaysRemaining(effectiveExpiry) ?: 0L
 
     Box(
         modifier = Modifier
@@ -162,7 +165,7 @@ fun ReminderTimelineCard(
             }
 
             Text(
-                text = "EXPIRY DATE: ${DateUtils.formatDate(item.expiryDate)}",
+                text = "EXPIRY DATE: ${if (effectiveExpiry != null) DateUtils.formatDate(effectiveExpiry) else "NONE"}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

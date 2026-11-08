@@ -67,11 +67,32 @@ data class Item(
     val orderId: String = "",
     val purchaseDate: Long, // Epoch millis
     val amount: Double? = null,
-    val warrantyValue: Int? = null,
-    val warrantyUnit: String = WarrantyUnit.MONTHS,
-    val warrantyStartDate: Long, // Epoch millis, defaults to purchaseDate
-    val expiryDate: Long? = null, // Calculated; null if no warranty entered
     val notes: String = "",
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = System.currentTimeMillis()
+)
+
+@Entity(
+    tableName = "warranty_parts",
+    foreignKeys = [
+        ForeignKey(
+            entity = Item::class,
+            parentColumns = ["id"],
+            childColumns = ["itemId"],
+            onDelete = ForeignKey.CASCADE
+        )
+    ],
+    indices = [Index(value = ["itemId"])]
+)
+data class WarrantyPart(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val itemId: Long,
+    val label: String, // custom text, max 30 characters
+    val durationValue: Int,
+    val durationUnit: String = WarrantyUnit.YEARS, // DAYS, MONTHS, or YEARS
+    val startDate: Long, // Epoch millis
+    val expiryDate: Long, // Epoch millis, calculated from startDate + durationValue and unit
+    val sortOrder: Int = 0,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis()
 )
@@ -146,13 +167,23 @@ data class Attachment(
             parentColumns = ["id"],
             childColumns = ["itemId"],
             onDelete = ForeignKey.CASCADE
+        ),
+        ForeignKey(
+            entity = WarrantyPart::class,
+            parentColumns = ["id"],
+            childColumns = ["partId"],
+            onDelete = ForeignKey.CASCADE
         )
     ],
-    indices = [Index(value = ["itemId"])]
+    indices = [
+        Index(value = ["itemId"]),
+        Index(value = ["partId"])
+    ]
 )
 data class Reminder(
     @PrimaryKey(autoGenerate = true) val id: Long = 0,
     val itemId: Long,
+    val partId: Long? = null,
     val reminderDate: Long, // Epoch timestamp in millis
     val daysBefore: Int, // 30, 7, 1
     val isSent: Boolean = false
@@ -179,5 +210,16 @@ data class ItemWithDetails(
         parentColumn = "id",
         entityColumn = "itemId"
     )
+    val warrantyParts: List<WarrantyPart>,
+    @Relation(
+        parentColumn = "id",
+        entityColumn = "itemId"
+    )
     val reminders: List<Reminder>
-)
+) {
+    val effectiveExpiryDate: Long?
+        get() = warrantyParts.mapNotNull { it.expiryDate.takeIf { exp -> exp > 0L } }.minOrNull()
+
+    val primaryWarrantyPart: WarrantyPart?
+        get() = warrantyParts.minByOrNull { it.sortOrder }
+}

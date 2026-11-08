@@ -28,16 +28,23 @@ class ExpiryReminderWorker(
 
         for (reminder in dueReminders) {
             val item = itemDao.getItemById(reminder.itemId) ?: continue
-            val expiryDate = item.expiryDate ?: continue
+            val part = if (reminder.partId != null) database.warrantyPartDao().getPartById(reminder.partId) else null
+            val expiryDate = part?.expiryDate
+                ?: database.warrantyPartDao().getWarrantyPartsForItemOnce(item.id).minByOrNull { it.expiryDate }?.expiryDate
+                ?: continue
 
             val daysRemaining = DateUtils.getDaysRemaining(expiryDate) ?: 0L
+            val partLabel = if (part != null && part.label.isNotBlank() && !part.label.equals("Warranty", ignoreCase = true)) {
+                " (${part.label})"
+            } else ""
+
             val title = when {
-                daysRemaining <= 0L -> "Warranty Expired: ${item.title}"
-                daysRemaining == 1L -> "Warranty Expires Tomorrow: ${item.title}"
-                else -> "Warranty Expiring in $daysRemaining Days: ${item.title}"
+                daysRemaining <= 0L -> "Warranty Expired: ${item.title}$partLabel"
+                daysRemaining == 1L -> "Warranty Expires Tomorrow: ${item.title}$partLabel"
+                else -> "Warranty Expiring in $daysRemaining Days: ${item.title}$partLabel"
             }
 
-            val body = "Protection plan / warranty for ${item.title} (${item.sellerName.ifBlank { "Store" }}) ends on ${DateUtils.formatDate(expiryDate)}."
+            val body = "Protection plan / warranty for ${item.title}$partLabel (${item.sellerName.ifBlank { "Store" }}) ends on ${DateUtils.formatDate(expiryDate)}."
 
             sendNotification(reminder.id.toInt(), item.id, title, body)
             reminderDao.markReminderSent(reminder.id)

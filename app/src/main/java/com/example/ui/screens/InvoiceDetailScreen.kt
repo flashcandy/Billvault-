@@ -151,8 +151,10 @@ fun InvoiceDetailScreen(
         val category = details.category
         val customFields = details.customFields.sortedBy { it.sortOrder }
         val attachments = details.attachments.sortedBy { it.addedAt }
-        val status = DateUtils.getExpiryStatus(item.expiryDate)
-        val daysRemaining = DateUtils.getDaysRemaining(item.expiryDate)
+        val effectiveExpiry = details.effectiveExpiryDate
+        val status = DateUtils.getExpiryStatus(effectiveExpiry)
+        val daysRemaining = DateUtils.getDaysRemaining(effectiveExpiry)
+        val warrantyParts = details.warrantyParts.sortedBy { it.sortOrder }
 
         LazyColumn(
             modifier = Modifier
@@ -227,75 +229,87 @@ fun InvoiceDetailScreen(
                         }
                         DetailMetaRow(label = "PURCHASE DATE", value = DateUtils.formatDate(item.purchaseDate))
 
-                        if (item.warrantyValue != null && item.warrantyValue > 0) {
-                            DetailMetaRow(
-                                label = "WARRANTY DURATION",
-                                value = "${item.warrantyValue} ${item.warrantyUnit}"
-                            )
-                        }
-
-                        // WARRANTY START (Editable)
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(4.dp))
-                                .clickable {
-                                    val startMillis = item.warrantyStartDate ?: item.purchaseDate
-                                    val localDate = Instant.ofEpochMilli(startMillis)
-                                        .atZone(ZoneId.systemDefault())
-                                        .toLocalDate()
-                                    DatePickerDialog(
-                                        context,
-                                        { _, year, monthZeroBased, dayOfMonth ->
-                                            val pickedMillis = DateUtils.localDateToMillis(year, monthZeroBased + 1, dayOfMonth)
-                                            viewModel.updateWarrantyStartDate(item.id, pickedMillis)
-                                        },
-                                        localDate.year,
-                                        localDate.monthValue - 1,
-                                        localDate.dayOfMonth
-                                    ).show()
+                        if (warrantyParts.isNotEmpty()) {
+                            warrantyParts.forEachIndexed { idx, part ->
+                                if (idx > 0) {
+                                    NothingDivider(modifier = Modifier.padding(vertical = 4.dp))
                                 }
-                                .padding(vertical = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Text(
-                                    text = "WARRANTY START",
-                                    style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                val labelText = if (part.label.isNotBlank() && !part.label.equals("Warranty", ignoreCase = true)) {
+                                    "WARRANTY: ${part.label.uppercase()}"
+                                } else {
+                                    "WARRANTY DURATION"
+                                }
+                                DetailMetaRow(
+                                    label = labelText,
+                                    value = "${part.durationValue} ${part.durationUnit}"
                                 )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Icon(
-                                    imageVector = Icons.Default.Edit,
-                                    contentDescription = "Edit warranty start date",
-                                    modifier = Modifier.size(14.dp),
-                                    tint = NothingRed
+
+                                // WARRANTY START (Editable)
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .clickable {
+                                            val startMillis = part.startDate
+                                            val localDate = Instant.ofEpochMilli(startMillis)
+                                                .atZone(ZoneId.systemDefault())
+                                                .toLocalDate()
+                                            DatePickerDialog(
+                                                context,
+                                                { _, year, monthZeroBased, dayOfMonth ->
+                                                    val pickedMillis = DateUtils.localDateToMillis(year, monthZeroBased + 1, dayOfMonth)
+                                                    viewModel.updateWarrantyPartStartDate(part.id, pickedMillis)
+                                                },
+                                                localDate.year,
+                                                localDate.monthValue - 1,
+                                                localDate.dayOfMonth
+                                            ).show()
+                                        }
+                                        .padding(vertical = 4.dp),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Text(
+                                            text = "WARRANTY START",
+                                            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                        Icon(
+                                            imageVector = Icons.Default.Edit,
+                                            contentDescription = "Edit warranty start date",
+                                            modifier = Modifier.size(14.dp),
+                                            tint = NothingRed
+                                        )
+                                    }
+                                    Text(
+                                        text = DateUtils.formatDate(part.startDate),
+                                        style = MaterialTheme.typography.bodyMedium.copy(
+                                            fontFamily = SpaceGroteskFontFamily,
+                                            fontWeight = FontWeight.Bold
+                                        ),
+                                        color = MaterialTheme.colorScheme.onBackground
+                                    )
+                                }
+                                Text(
+                                    text = "Use the delivery date if it differs from purchase.",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = SpaceGroteskFontFamily,
+                                        fontSize = 11.sp
+                                    ),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(bottom = 6.dp)
+                                )
+
+                                DetailMetaRow(
+                                    label = "EXPIRY",
+                                    value = if (part.expiryDate > 0L) DateUtils.formatDate(part.expiryDate) else "NONE"
                                 )
                             }
-                            Text(
-                                text = DateUtils.formatDate(item.warrantyStartDate ?: item.purchaseDate),
-                                style = MaterialTheme.typography.bodyMedium.copy(
-                                    fontFamily = SpaceGroteskFontFamily,
-                                    fontWeight = FontWeight.Bold
-                                ),
-                                color = MaterialTheme.colorScheme.onBackground
-                            )
+                        } else {
+                            DetailMetaRow(label = "WARRANTY / EXPIRY", value = "NONE")
                         }
-                        Text(
-                            text = "Use the delivery date if it differs from purchase.",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontFamily = SpaceGroteskFontFamily,
-                                fontSize = 11.sp
-                            ),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(bottom = 6.dp)
-                        )
-
-                        DetailMetaRow(
-                            label = "EXPIRY",
-                            value = if (item.expiryDate != null) DateUtils.formatDate(item.expiryDate) else "NONE"
-                        )
 
                         NothingDivider(modifier = Modifier.padding(vertical = 4.dp))
 

@@ -25,6 +25,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -35,6 +36,8 @@ import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -46,6 +49,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -56,6 +60,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
@@ -66,6 +71,7 @@ import com.example.data.model.Category
 import com.example.data.model.CustomField
 import com.example.data.model.CustomFieldType
 import com.example.data.model.Item
+import com.example.data.model.WarrantyPart
 import com.example.data.model.WarrantyUnit
 import com.example.ui.components.CategoryManageDialog
 import com.example.ui.components.NothingButton
@@ -79,10 +85,32 @@ import com.example.ui.theme.SpaceGroteskFontFamily
 import com.example.ui.viewmodel.MainViewModel
 import com.example.utils.DateUtils
 import com.example.utils.FileStorageHelper
+import com.example.utils.OpenRouterParseOutcome
+import com.example.utils.OpenRouterService
 import com.example.utils.PendingAttachment
+import com.example.utils.WarrantyParserUtils
+import kotlinx.coroutines.launch
 import java.io.File
 import java.time.Instant
 import java.time.ZoneId
+
+data class WarrantyPartUIState(
+    val id: Long = 0L,
+    var label: String = "Warranty",
+    var durationValue: Int = 1,
+    var durationUnit: String = WarrantyUnit.YEARS,
+    var startDateStr: String = "",
+    var userEditedStartDate: Boolean = false
+) {
+    fun getEffectiveStartDateMillis(purchaseDateMillis: Long): Long {
+        return DateUtils.parseDateToMillis(startDateStr) ?: purchaseDateMillis
+    }
+
+    fun getCalculatedExpiryMillis(purchaseDateMillis: Long): Long {
+        val startMillis = getEffectiveStartDateMillis(purchaseDateMillis)
+        return DateUtils.calculateExpiryDate(startMillis, durationValue, durationUnit) ?: startMillis
+    }
+}
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -109,13 +137,27 @@ fun AddInvoiceScreen(
 
     val todayIso = remember { DateUtils.formatIsoDate(System.currentTimeMillis()) }
     var purchaseDateStr by remember { mutableStateOf(todayIso) }
-    var warrantyStartDateStr by remember { mutableStateOf(todayIso) }
-    var userEditedWarrantyStart by remember { mutableStateOf(false) }
-
     var amountStr by remember { mutableStateOf("") }
-    var warrantyValueStr by remember { mutableStateOf("") }
-    var warrantyUnit by remember { mutableStateOf(WarrantyUnit.MONTHS) }
     var notes by remember { mutableStateOf("") }
+
+    // Warranty Section State
+    val coroutineScope = rememberCoroutineScope()
+    var warrantyDescriptionText by remember { mutableStateOf("") }
+    val warrantyPartsState = remember { mutableStateListOf<WarrantyPartUIState>() }
+    var isParsingWarranty by remember { mutableStateOf(false) }
+    var aiReviewStatusMessage by remember { mutableStateOf<String?>(null) }
+    val discardedPartMessages = remember { mutableStateListOf<String>() }
+    val unparsedLinesList = remember { mutableStateListOf<String>() }
+    var unparsedSegmentsMessage by remember { mutableStateOf<String?>(null) }
+
+    // Warranty Part Dialog State
+    var showPartDialog by remember { mutableStateOf(false) }
+    var editingPartIndex by remember { mutableStateOf<Int?>(null) }
+    var dialogLabel by remember { mutableStateOf("") }
+    var dialogDurationValueStr by remember { mutableStateOf("1") }
+    var dialogDurationUnit by remember { mutableStateOf(WarrantyUnit.YEARS) }
+    var dialogStartDateStr by remember { mutableStateOf(todayIso) }
+    var dialogUserEditedStart by remember { mutableStateOf(false) }
 
     // Custom fields & attachments
     val customFields = remember { mutableStateListOf<CustomField>() }
@@ -151,12 +193,24 @@ fun AddInvoiceScreen(
                 invoiceNumber = item.invoiceNumber
                 orderId = item.orderId
                 purchaseDateStr = DateUtils.formatIsoDate(item.purchaseDate)
-                warrantyStartDateStr = DateUtils.formatIsoDate(item.warrantyStartDate)
-                userEditedWarrantyStart = item.warrantyStartDate != item.purchaseDate
                 amountStr = item.amount?.let { if (it > 0) it.toString() else "" } ?: ""
-                warrantyValueStr = item.warrantyValue?.let { if (it > 0) it.toString() else "" } ?: ""
-                warrantyUnit = item.warrantyUnit
                 notes = item.notes
+
+                warrantyPartsState.clear()
+                if (details.warrantyParts.isNotEmpty()) {
+                    warrantyPartsState.addAll(
+                        details.warrantyParts.sortedBy { it.sortOrder }.map { part ->
+                            WarrantyPartUIState(
+                                id = part.id,
+                                label = part.label,
+                                durationValue = part.durationValue,
+                                durationUnit = part.durationUnit,
+                                startDateStr = DateUtils.formatIsoDate(part.startDate),
+                                userEditedStartDate = part.startDate != item.purchaseDate
+                            )
+                        }
+                    )
+                }
 
                 customFields.clear()
                 customFields.addAll(details.customFields.sortedBy { it.sortOrder })
@@ -192,20 +246,6 @@ fun AddInvoiceScreen(
     val activeCategoryId = selectedCategoryId ?: 0L
     val categoryTemplates by viewModel.repository.getTemplatesForCategory(activeCategoryId)
         .collectAsStateWithLifecycle(initialValue = emptyList())
-
-    // Live calculation of Expiry Date
-    val parsedPurchaseMillis = DateUtils.parseDateToMillis(purchaseDateStr)
-    val parsedWarrantyStartMillis = DateUtils.parseDateToMillis(warrantyStartDateStr)
-        ?: parsedPurchaseMillis
-        ?: System.currentTimeMillis()
-    val parsedWarrantyValue = warrantyValueStr.trim().toIntOrNull()
-    val calculatedExpiryMillis = remember(parsedWarrantyStartMillis, parsedWarrantyValue, warrantyUnit) {
-        DateUtils.calculateExpiryDate(
-            startDateMillis = parsedWarrantyStartMillis,
-            warrantyValue = parsedWarrantyValue,
-            warrantyUnit = warrantyUnit
-        )
-    }
 
     // File Picker Launcher (PDF or Image)
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -264,6 +304,7 @@ fun AddInvoiceScreen(
                     text = "CANCEL",
                     isPrimary = false,
                     onClick = onCancel,
+                    contentDescription = "Cancel item creation or editing",
                     modifier = Modifier.weight(1f),
                     testTag = "add_cancel_button"
                 )
@@ -304,9 +345,6 @@ fun AddInvoiceScreen(
                             return@NothingButton
                         }
 
-                        val finalWarrantyStart = DateUtils.parseDateToMillis(warrantyStartDateStr)
-                            ?: validPurchaseMillis
-
                         val itemToSave = Item(
                             id = editItemId ?: 0L,
                             title = cleanTitle,
@@ -316,22 +354,35 @@ fun AddInvoiceScreen(
                             orderId = orderId.trim(),
                             purchaseDate = validPurchaseMillis,
                             amount = amountStr.trim().toDoubleOrNull(),
-                            warrantyValue = parsedWarrantyValue?.takeIf { it > 0 },
-                            warrantyUnit = warrantyUnit,
-                            warrantyStartDate = finalWarrantyStart,
-                            expiryDate = calculatedExpiryMillis,
                             notes = notes.trim(),
                             createdAt = existingCreatedAt
                         )
 
+                        val finalWarrantyPartsToSave = warrantyPartsState.mapIndexed { index, partState ->
+                            val startMillis = partState.getEffectiveStartDateMillis(validPurchaseMillis)
+                            val expiryMillis = partState.getCalculatedExpiryMillis(validPurchaseMillis)
+                            WarrantyPart(
+                                id = partState.id,
+                                itemId = editItemId ?: 0L,
+                                label = partState.label.trim().take(30).ifBlank { "Warranty" },
+                                durationValue = partState.durationValue,
+                                durationUnit = partState.durationUnit,
+                                startDate = startMillis,
+                                expiryDate = expiryMillis,
+                                sortOrder = index
+                            )
+                        }
+
                         viewModel.saveOrUpdateItem(
                             item = itemToSave,
                             customFields = customFields.toList(),
-                            pendingAttachments = pendingAttachments.toList()
+                            pendingAttachments = pendingAttachments.toList(),
+                            warrantyParts = finalWarrantyPartsToSave
                         ) { savedId ->
                             onSaved(savedId)
                         }
                     },
+                    contentDescription = "Save bill item and warranty parts",
                     modifier = Modifier.weight(1f),
                     testTag = "add_save_button"
                 )
@@ -534,8 +585,10 @@ fun AddInvoiceScreen(
                     value = purchaseDateStr,
                     onValueChange = {
                         purchaseDateStr = it
-                        if (!userEditedWarrantyStart) {
-                            warrantyStartDateStr = it
+                        warrantyPartsState.forEach { part ->
+                            if (!part.userEditedStartDate) {
+                                part.startDateStr = it
+                            }
                         }
                         if (DateUtils.parseDateToMillis(it) != null) {
                             purchaseDateError = null
@@ -549,8 +602,10 @@ fun AddInvoiceScreen(
                             onClick = {
                                 showDatePicker(purchaseDateStr) { picked ->
                                     purchaseDateStr = picked
-                                    if (!userEditedWarrantyStart) {
-                                        warrantyStartDateStr = picked
+                                    warrantyPartsState.forEach { part ->
+                                        if (!part.userEditedStartDate) {
+                                            part.startDateStr = picked
+                                        }
                                     }
                                     purchaseDateError = null
                                 }
@@ -570,96 +625,401 @@ fun AddInvoiceScreen(
 
             item { NothingDivider() }
 
-            // 6. Warranty & Expiry Section
+            // 6. Warranty Section
             item {
-                Text(
-                    text = "WARRANTY & EXPIRY CALCULATION",
-                    style = MaterialTheme.typography.labelLarge.copy(
-                        fontFamily = DotoFontFamily,
-                        letterSpacing = 1.5.sp
-                    ),
-                    color = NothingRed
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "WARRANTY PARTS (${warrantyPartsState.size})",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontFamily = DotoFontFamily,
+                            letterSpacing = 1.5.sp
+                        ),
+                        color = NothingRed
+                    )
+                }
             }
 
             item {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     NothingTextField(
-                        value = warrantyValueStr,
-                        onValueChange = { warrantyValueStr = it.filter { ch -> ch.isDigit() } },
-                        label = "WARRANTY / EXPIRY DURATION",
-                        placeholder = "Leave empty if no warranty",
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                        testTag = "input_warranty_value"
+                        value = warrantyDescriptionText,
+                        onValueChange = { warrantyDescriptionText = it },
+                        label = "DESCRIBE WARRANTY",
+                        placeholder = "Describe the warranty, for example: 1 year body, 2 year motor",
+                        singleLine = false,
+                        testTag = "input_warranty_description"
                     )
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
-                        WarrantyUnit.ALL.forEach { unit ->
-                            NothingChip(
-                                text = unit,
-                                isSelected = warrantyUnit == unit,
-                                onClick = { warrantyUnit = unit },
-                                modifier = Modifier.weight(1f),
-                                testTag = "warranty_unit_$unit"
+                        NothingButton(
+                            text = if (isParsingWarranty) "PARSING..." else "PARSE",
+                            isPrimary = true,
+                            enabled = !isParsingWarranty,
+                            onClick = {
+                                unparsedSegmentsMessage = null
+                                aiReviewStatusMessage = null
+                                discardedPartMessages.clear()
+                                unparsedLinesList.clear()
+
+                                if (warrantyDescriptionText.isNotBlank()) {
+                                    val apiKey = viewModel.settingsManager.openRouterApiKey.trim()
+                                    val preferredModel = viewModel.settingsManager.selectedAiModel
+
+                                    if (apiKey.isNotBlank()) {
+                                        isParsingWarranty = true
+                                        coroutineScope.launch {
+                                            // PRIVACY: Only productName (title) and warrantyText are sent.
+                                            val outcome = OpenRouterService.parseWarrantyWithAi(
+                                                productName = title,
+                                                warrantyText = warrantyDescriptionText,
+                                                apiKey = apiKey,
+                                                preferredModel = preferredModel
+                                            )
+                                            isParsingWarranty = false
+
+                                            when (outcome) {
+                                                is OpenRouterParseOutcome.Success -> {
+                                                    outcome.validParts.forEach { parsed ->
+                                                        warrantyPartsState.add(
+                                                            WarrantyPartUIState(
+                                                                label = parsed.label,
+                                                                durationValue = parsed.durationValue,
+                                                                durationUnit = parsed.durationUnit,
+                                                                startDateStr = purchaseDateStr,
+                                                                userEditedStartDate = false
+                                                            )
+                                                        )
+                                                    }
+                                                    discardedPartMessages.addAll(outcome.discardedMessages)
+                                                    val fallbackTag = if (outcome.usedFallbackModel) " [Fallback: ${outcome.modelUsed}]" else " [${outcome.modelUsed}]"
+                                                    aiReviewStatusMessage = "AI parsed ${outcome.validParts.size} part(s)$fallbackTag. Review below and tap SAVE to confirm."
+                                                }
+                                                is OpenRouterParseOutcome.Failure -> {
+                                                    val localResult = WarrantyParserUtils.parseLocal(warrantyDescriptionText)
+                                                    localResult.parts.forEach { parsed ->
+                                                        warrantyPartsState.add(
+                                                            WarrantyPartUIState(
+                                                                label = parsed.label,
+                                                                durationValue = parsed.durationValue,
+                                                                durationUnit = parsed.durationUnit,
+                                                                startDateStr = purchaseDateStr,
+                                                                userEditedStartDate = false
+                                                            )
+                                                        )
+                                                    }
+                                                    aiReviewStatusMessage = "AI request failed (${outcome.reason}). Used local fallback parser — review below and tap SAVE to confirm."
+                                                    if (localResult.unparsedSegments.isNotEmpty()) {
+                                                        unparsedLinesList.addAll(localResult.unparsedSegments)
+                                                        unparsedSegmentsMessage = "Could not parse: ${localResult.unparsedSegments.joinToString(", ")}. Add manually below."
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        val result = WarrantyParserUtils.parseLocal(warrantyDescriptionText)
+                                        if (result.parts.isNotEmpty()) {
+                                            result.parts.forEach { parsed ->
+                                                warrantyPartsState.add(
+                                                    WarrantyPartUIState(
+                                                        label = parsed.label,
+                                                        durationValue = parsed.durationValue,
+                                                        durationUnit = parsed.durationUnit,
+                                                        startDateStr = purchaseDateStr,
+                                                        userEditedStartDate = false
+                                                    )
+                                                )
+                                            }
+                                            aiReviewStatusMessage = "Parsed ${result.parts.size} part(s) locally. Review below and tap SAVE to confirm."
+                                        }
+                                        if (result.unparsedSegments.isNotEmpty()) {
+                                            unparsedLinesList.addAll(result.unparsedSegments)
+                                            unparsedSegmentsMessage = "Could not parse: ${result.unparsedSegments.joinToString(", ")}. Add manually below."
+                                        }
+                                    }
+                                }
+                            },
+                            contentDescription = "Parse warranty description text into structured parts",
+                            modifier = Modifier.weight(1f),
+                            testTag = "warranty_parse_button"
+                        )
+
+                        NothingButton(
+                            text = "+ ADD PART",
+                            isPrimary = false,
+                            onClick = {
+                                editingPartIndex = null
+                                dialogLabel = "Warranty"
+                                dialogDurationValueStr = "1"
+                                dialogDurationUnit = WarrantyUnit.YEARS
+                                dialogStartDateStr = purchaseDateStr
+                                dialogUserEditedStart = false
+                                showPartDialog = true
+                            },
+                            contentDescription = "Add a new warranty part manually",
+                            modifier = Modifier.weight(1f),
+                            testTag = "warranty_add_part_button"
+                        )
+                    }
+
+                    if (isParsingWarranty) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(MaterialTheme.colorScheme.surface)
+                                .border(1.dp, NothingRed, RoundedCornerShape(6.dp))
+                                .padding(horizontal = 12.dp, vertical = 10.dp)
+                                .testTag("warranty_ai_loading"),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = NothingRed
                             )
+                            Text(
+                                text = "PARSING WARRANTY WITH OPENROUTER AI...",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = DotoFontFamily,
+                                    letterSpacing = 1.sp
+                                ),
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                        }
+                    }
+
+                    if (!aiReviewStatusMessage.isNullOrBlank()) {
+                        Text(
+                            text = aiReviewStatusMessage!!,
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = SpaceGroteskFontFamily
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .padding(top = 2.dp)
+                                .testTag("warranty_review_status_message")
+                        )
+                    }
+
+                    discardedPartMessages.forEachIndexed { idx, msg ->
+                        Text(
+                            text = msg,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = NothingRed,
+                            modifier = Modifier
+                                .padding(top = 2.dp)
+                                .testTag("warranty_discarded_message_$idx")
+                        )
+                    }
+
+                    if (!unparsedSegmentsMessage.isNullOrBlank()) {
+                        Text(
+                            text = unparsedSegmentsMessage!!,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = NothingRed,
+                            modifier = Modifier
+                                .padding(top = 2.dp)
+                                .testTag("warranty_unparsed_message")
+                        )
+                    }
+
+                    if (unparsedLinesList.isNotEmpty()) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(MaterialTheme.colorScheme.surface)
+                                .border(1.dp, NothingRed, RoundedCornerShape(6.dp))
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            Text(
+                                text = "UNPARSED LINES (ADD MANUALLY)",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontFamily = DotoFontFamily,
+                                    letterSpacing = 1.sp
+                                ),
+                                color = NothingRed
+                            )
+
+                            unparsedLinesList.forEachIndexed { idx, line ->
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("unparsed_line_row_$idx"),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "\"$line\"",
+                                        style = MaterialTheme.typography.bodySmall.copy(
+                                            fontFamily = SpaceGroteskFontFamily
+                                        ),
+                                        color = MaterialTheme.colorScheme.onBackground,
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .padding(end = 8.dp)
+                                    )
+
+                                    NothingChip(
+                                        text = "+ ADD MANUALLY",
+                                        isSelected = false,
+                                        onClick = {
+                                            editingPartIndex = null
+                                            dialogLabel = line.take(30).ifBlank { "Warranty" }
+                                            dialogDurationValueStr = "1"
+                                            dialogDurationUnit = WarrantyUnit.YEARS
+                                            dialogStartDateStr = purchaseDateStr
+                                            dialogUserEditedStart = false
+                                            showPartDialog = true
+                                        },
+                                        testTag = "unparsed_line_add_button_$idx"
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
 
-            // Warranty Start Date & Read-only Calculated Expiry Date
-            item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    NothingTextField(
-                        value = warrantyStartDateStr,
-                        onValueChange = {
-                            warrantyStartDateStr = it
-                            userEditedWarrantyStart = true
-                        },
-                        label = "WARRANTY START DATE",
-                        placeholder = "YYYY-MM-DD",
-                        trailingIcon = {
-                            IconButton(
-                                onClick = {
-                                    showDatePicker(warrantyStartDateStr) { picked ->
-                                        warrantyStartDateStr = picked
-                                        userEditedWarrantyStart = true
-                                    }
-                                },
-                                modifier = Modifier.testTag("warranty_start_date_picker_button")
+            if (warrantyPartsState.isEmpty()) {
+                item {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                            .padding(16.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "NO WARRANTY PARTS ADDED\nEnter text above and tap PARSE, or tap + ADD PART",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = SpaceGroteskFontFamily
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+            } else {
+                itemsIndexed(warrantyPartsState) { index, part ->
+                    val purchaseMillis = DateUtils.parseDateToMillis(purchaseDateStr) ?: System.currentTimeMillis()
+                    val startMillis = part.getEffectiveStartDateMillis(purchaseMillis)
+                    val expiryMillis = part.getCalculatedExpiryMillis(purchaseMillis)
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .border(1.dp, MaterialTheme.colorScheme.outline, RoundedCornerShape(8.dp))
+                            .padding(12.dp)
+                    ) {
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(
-                                    imageVector = Icons.Default.CalendarToday,
-                                    contentDescription = "Pick Warranty Start Date",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.weight(1f)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .clip(CircleShape)
+                                            .background(NothingRed)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = part.label.uppercase(),
+                                        style = MaterialTheme.typography.titleMedium.copy(
+                                            fontFamily = SpaceGroteskFontFamily,
+                                            fontWeight = FontWeight.Bold
+                                        ),
+                                        color = MaterialTheme.colorScheme.onBackground
+                                    )
+                                }
+
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    IconButton(
+                                        onClick = {
+                                            editingPartIndex = index
+                                            dialogLabel = part.label
+                                            dialogDurationValueStr = part.durationValue.toString()
+                                            dialogDurationUnit = part.durationUnit
+                                            dialogStartDateStr = if (part.startDateStr.isNotBlank()) part.startDateStr else purchaseDateStr
+                                            dialogUserEditedStart = part.userEditedStartDate
+                                            showPartDialog = true
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Edit,
+                                            contentDescription = "Edit Warranty Part ${part.label}",
+                                            modifier = Modifier.size(16.dp),
+                                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+
+                                    IconButton(
+                                        onClick = {
+                                            warrantyPartsState.removeAt(index)
+                                        },
+                                        modifier = Modifier.size(32.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Default.Delete,
+                                            contentDescription = "Delete Warranty Part ${part.label}",
+                                            modifier = Modifier.size(16.dp),
+                                            tint = NothingRed
+                                        )
+                                    }
+                                }
+                            }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Text(
+                                    text = "DURATION: ${part.durationValue} ${part.durationUnit}",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = DotoFontFamily,
+                                        letterSpacing = 1.sp
+                                    ),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+
+                                Text(
+                                    text = "EXP: ${DateUtils.formatIsoDate(expiryMillis)}",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontFamily = DotoFontFamily,
+                                        fontWeight = FontWeight.Bold,
+                                        letterSpacing = 1.sp
+                                    ),
+                                    color = NothingRed
                                 )
                             }
-                        },
-                        modifier = Modifier.weight(1f),
-                        testTag = "input_warranty_start_date"
-                    )
 
-                    val readOnlyExpiryText = if (calculatedExpiryMillis != null) {
-                        DateUtils.formatIsoDate(calculatedExpiryMillis)
-                    } else {
-                        "NONE"
+                            Text(
+                                text = "START: ${DateUtils.formatIsoDate(startMillis)} • Use delivery date if it differs.",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f)
+                            )
+                        }
                     }
-
-                    NothingTextField(
-                        value = readOnlyExpiryText,
-                        onValueChange = {},
-                        readOnly = true,
-                        label = "CALCULATED EXPIRY",
-                        placeholder = "NONE",
-                        modifier = Modifier.weight(1f),
-                        testTag = "readonly_expiry_date"
-                    )
                 }
             }
 
@@ -874,6 +1234,151 @@ fun AddInvoiceScreen(
 
             item { Spacer(modifier = Modifier.height(32.dp)) }
         }
+    }
+
+    if (showPartDialog) {
+        val purchaseMillis = DateUtils.parseDateToMillis(purchaseDateStr) ?: System.currentTimeMillis()
+        val currentStartMillis = DateUtils.parseDateToMillis(dialogStartDateStr) ?: purchaseMillis
+        val currentDurationVal = dialogDurationValueStr.trim().toIntOrNull()
+        val previewExpiryMillis = DateUtils.calculateExpiryDate(currentStartMillis, currentDurationVal, dialogDurationUnit) ?: currentStartMillis
+
+        AlertDialog(
+            onDismissRequest = { showPartDialog = false },
+            containerColor = MaterialTheme.colorScheme.surface,
+            titleContentColor = MaterialTheme.colorScheme.onSurface,
+            textContentColor = MaterialTheme.colorScheme.onSurface,
+            title = {
+                Text(
+                    text = if (editingPartIndex == null) "ADD WARRANTY PART" else "EDIT WARRANTY PART",
+                    style = MaterialTheme.typography.titleMedium.copy(
+                        fontFamily = DotoFontFamily,
+                        letterSpacing = 1.5.sp
+                    ),
+                    color = NothingRed
+                )
+            },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    NothingTextField(
+                        value = dialogLabel,
+                        onValueChange = { dialogLabel = it.take(30) },
+                        label = "LABEL (MAX 30 CHARS)",
+                        placeholder = "e.g. Motor, Body, Compressor",
+                        counterText = "${dialogLabel.length}/30",
+                        testTag = "part_dialog_label_input"
+                    )
+
+                    NothingTextField(
+                        value = dialogDurationValueStr,
+                        onValueChange = { dialogDurationValueStr = it.filter { ch -> ch.isDigit() } },
+                        label = "DURATION VALUE",
+                        placeholder = "1",
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        testTag = "part_dialog_duration_input"
+                    )
+
+                    Column {
+                        Text(
+                            text = "DURATION UNIT",
+                            style = MaterialTheme.typography.labelSmall.copy(letterSpacing = 1.2.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 4.dp)
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        ) {
+                            WarrantyUnit.ALL.forEach { unit ->
+                                NothingChip(
+                                    text = unit,
+                                    isSelected = dialogDurationUnit == unit,
+                                    onClick = { dialogDurationUnit = unit },
+                                    modifier = Modifier.weight(1f),
+                                    testTag = "part_dialog_unit_$unit"
+                                )
+                            }
+                        }
+                    }
+
+                    NothingTextField(
+                        value = dialogStartDateStr,
+                        onValueChange = {
+                            dialogStartDateStr = it
+                            dialogUserEditedStart = true
+                        },
+                        label = "WARRANTY START DATE",
+                        placeholder = "YYYY-MM-DD",
+                        helperText = "Use the delivery date if it differs.",
+                        trailingIcon = {
+                            IconButton(
+                                onClick = {
+                                    showDatePicker(dialogStartDateStr) { picked ->
+                                        dialogStartDateStr = picked
+                                        dialogUserEditedStart = true
+                                    }
+                                },
+                                modifier = Modifier.testTag("part_dialog_start_date_picker")
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.CalendarToday,
+                                    contentDescription = "Pick Warranty Start Date",
+                                    tint = NothingRed
+                                )
+                            }
+                        },
+                        testTag = "part_dialog_start_date_input"
+                    )
+
+                    Text(
+                        text = "CALCULATED EXPIRY: ${DateUtils.formatIsoDate(previewExpiryMillis)}",
+                        style = MaterialTheme.typography.labelMedium.copy(
+                            fontFamily = DotoFontFamily,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp
+                        ),
+                        color = NothingRed
+                    )
+                }
+            },
+            confirmButton = {
+                NothingButton(
+                    text = "SAVE PART",
+                    isPrimary = true,
+                    onClick = {
+                        val durationVal = dialogDurationValueStr.trim().toIntOrNull() ?: 1
+                        val cleanLabel = dialogLabel.trim().take(30).ifBlank { "Warranty" }
+                        val effectiveStartStr = dialogStartDateStr.ifBlank { purchaseDateStr }
+
+                        val newPartState = WarrantyPartUIState(
+                            id = if (editingPartIndex != null && editingPartIndex!! < warrantyPartsState.size) warrantyPartsState[editingPartIndex!!].id else 0L,
+                            label = cleanLabel,
+                            durationValue = durationVal,
+                            durationUnit = dialogDurationUnit,
+                            startDateStr = effectiveStartStr,
+                            userEditedStartDate = dialogUserEditedStart || (effectiveStartStr != purchaseDateStr)
+                        )
+
+                        if (editingPartIndex != null && editingPartIndex!! < warrantyPartsState.size) {
+                            warrantyPartsState[editingPartIndex!!] = newPartState
+                        } else {
+                            warrantyPartsState.add(newPartState)
+                        }
+                        showPartDialog = false
+                    },
+                    modifier = Modifier.width(130.dp),
+                    testTag = "part_dialog_save_button"
+                )
+            },
+            dismissButton = {
+                NothingButton(
+                    text = "CANCEL",
+                    isPrimary = false,
+                    onClick = { showPartDialog = false },
+                    modifier = Modifier.width(100.dp),
+                    testTag = "part_dialog_cancel_button"
+                )
+            }
+        )
     }
 
     if (showCategoryDialog) {

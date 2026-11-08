@@ -10,6 +10,7 @@ import com.example.data.model.CustomField
 import com.example.data.model.Item
 import com.example.data.model.ItemWithDetails
 import com.example.data.model.Reminder
+import com.example.data.model.WarrantyPart
 import com.example.data.preferences.SettingsManager
 import com.example.data.repository.InvoiceRepository
 import com.example.utils.FileStorageHelper
@@ -33,7 +34,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         itemDao = database.itemDao(),
         customFieldDao = database.customFieldDao(),
         attachmentDao = database.attachmentDao(),
-        reminderDao = database.reminderDao()
+        reminderDao = database.reminderDao(),
+        warrantyPartDao = database.warrantyPartDao()
     )
 
     private val _searchQuery = MutableStateFlow("")
@@ -85,6 +87,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     val allItems: StateFlow<List<Item>> = repository.allItems.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    val allItemsWithDetails: StateFlow<List<ItemWithDetails>> = repository.allItemsWithDetails.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = emptyList()
@@ -149,6 +157,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         item: Item,
         customFields: List<CustomField>,
         pendingAttachments: List<PendingAttachment>,
+        warrantyParts: List<WarrantyPart> = emptyList(),
         onComplete: (Long) -> Unit
     ) {
         viewModelScope.launch {
@@ -157,7 +166,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 settingsManager = settingsManager,
                 item = item,
                 customFields = customFields,
-                pendingAttachments = pendingAttachments
+                pendingAttachments = pendingAttachments,
+                warrantyParts = warrantyParts
             )
             onComplete(savedId)
         }
@@ -189,6 +199,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     ) {
         viewModelScope.launch {
             repository.updateWarrantyStartDate(itemId, newStartDateMillis)
+            onComplete?.invoke()
+        }
+    }
+
+    fun updateWarrantyPartStartDate(partId: Long, newStartDateMillis: Long, onComplete: (() -> Unit)? = null) {
+        viewModelScope.launch {
+            repository.updateWarrantyPartStartDate(partId, newStartDateMillis)
             onComplete?.invoke()
         }
     }

@@ -6,6 +6,7 @@ import com.example.data.local.CategoryDao
 import com.example.data.local.CustomFieldDao
 import com.example.data.local.ItemDao
 import com.example.data.local.ReminderDao
+import com.example.data.local.WarrantyPartDao
 import com.example.data.model.Attachment
 import com.example.data.model.Category
 import com.example.data.model.CategoryMarker
@@ -15,6 +16,7 @@ import com.example.data.model.CustomFieldType
 import com.example.data.model.Item
 import com.example.data.model.ItemWithDetails
 import com.example.data.model.Reminder
+import com.example.data.model.WarrantyPart
 import com.example.data.model.WarrantyUnit
 import com.example.data.preferences.SettingsManager
 import com.example.utils.DateUtils
@@ -30,7 +32,8 @@ class InvoiceRepository(
     private val itemDao: ItemDao,
     private val customFieldDao: CustomFieldDao,
     private val attachmentDao: AttachmentDao,
-    private val reminderDao: ReminderDao
+    private val reminderDao: ReminderDao,
+    val warrantyPartDao: WarrantyPartDao
 ) {
 
     val allCategories: Flow<List<Category>> = categoryDao.getAllCategories()
@@ -152,24 +155,18 @@ class InvoiceRepository(
     }
 
     /**
-     * Saves or updates an Item along with its CustomFields, Attachments, and Reminders.
+     * Saves or updates an Item along with its CustomFields, Attachments, WarrantyParts, and Reminders.
      */
     suspend fun saveOrUpdateItem(
         context: Context,
         settingsManager: SettingsManager,
         item: Item,
         customFields: List<CustomField>,
-        pendingAttachments: List<PendingAttachment>
+        pendingAttachments: List<PendingAttachment>,
+        warrantyParts: List<WarrantyPart> = emptyList()
     ): Long {
-        val computedExpiry = DateUtils.calculateExpiryDate(
-            startDateMillis = item.warrantyStartDate,
-            warrantyValue = item.warrantyValue,
-            warrantyUnit = item.warrantyUnit
-        )
-
         val now = System.currentTimeMillis()
         val itemToSave = item.copy(
-            expiryDate = computedExpiry,
             updatedAt = now,
             createdAt = if (item.id == 0L) now else item.createdAt
         )
@@ -223,27 +220,65 @@ class InvoiceRepository(
             }
         }
 
-        // 3. Reschedule Reminders
-        rescheduleReminders(itemId = itemId, expiryDate = computedExpiry)
+        // 3. Update WarrantyParts
+        warrantyPartDao.deleteWarrantyPartsForItem(itemId)
+        val partsToInsert = warrantyParts
+            .filter { it.durationValue > 0 }
+            .mapIndexed { index, part ->
+                val computedExpiry = DateUtils.calculateExpiryDate(
+                    startDateMillis = part.startDate,
+                    warrantyValue = part.durationValue,
+                    warrantyUnit = part.durationUnit
+                ) ?: part.startDate
+                part.copy(
+                    id = 0L,
+                    itemId = itemId,
+                    label = part.label.trim().take(30).ifBlank { "Warranty" },
+                    expiryDate = computedExpiry,
+                    sortOrder = index,
+                    createdAt = if (part.createdAt > 0L) part.createdAt else now,
+                    updatedAt = now
+                )
+            }
+        val insertedPartIds = if (partsToInsert.isNotEmpty()) {
+            warrantyPartDao.insertWarrantyParts(partsToInsert)
+        } else {
+            emptyList()
+        }
+
+        val savedPartsWithIds = partsToInsert.mapIndexed { index, part ->
+            part.copy(id = insertedPartIds.getOrElse(index) { 0L })
+        }
+
+        // 4. Reschedule Reminders per Part
+        rescheduleRemindersForParts(itemId = itemId, parts = savedPartsWithIds)
 
         return itemId
     }
 
-    private suspend fun rescheduleReminders(itemId: Long, expiryDate: Long?) {
+    private suspend fun rescheduleRemindersForParts(itemId: Long, parts: List<WarrantyPart>) {
         reminderDao.deleteRemindersForItem(itemId)
-        if (expiryDate == null || expiryDate <= 0L) return
-
-        val reminderPairs = DateUtils.calculateReminderDates(expiryDate)
         val now = System.currentTimeMillis()
-        val reminders = reminderPairs.map { (daysBefore, reminderDate) ->
-            Reminder(
-                itemId = itemId,
-                reminderDate = reminderDate,
-                daysBefore = daysBefore,
-                isSent = reminderDate < now
-            )
+        val allReminders = mutableListOf<Reminder>()
+
+        for (part in parts) {
+            if (part.expiryDate <= 0L) continue
+            val reminderPairs = DateUtils.calculateReminderDates(part.expiryDate)
+            for ((daysBefore, reminderDate) in reminderPairs) {
+                allReminders.add(
+                    Reminder(
+                        itemId = itemId,
+                        partId = part.id,
+                        reminderDate = reminderDate,
+                        daysBefore = daysBefore,
+                        isSent = reminderDate < now
+                    )
+                )
+            }
         }
-        reminderDao.insertReminders(reminders)
+        if (allReminders.isNotEmpty()) {
+            reminderDao.insertReminders(allReminders)
+        }
     }
 
     suspend fun deleteAttachment(attachment: Attachment) {
@@ -263,26 +298,51 @@ class InvoiceRepository(
             )
         }
         reminderDao.deleteRemindersForItem(itemId)
+        warrantyPartDao.deleteWarrantyPartsForItem(itemId)
         itemDao.deleteItemById(itemId)
     }
 
     /**
-     * Updates the warranty start date of an existing item and recalculates its expiry date
+     * Updates the warranty start date of a specific warranty part and recalculates its expiry date
      * and reminder schedule immediately.
      */
-    suspend fun updateWarrantyStartDate(itemId: Long, newStartDateMillis: Long) {
-        val item = itemDao.getItemById(itemId) ?: return
+    suspend fun updateWarrantyPartStartDate(partId: Long, newStartDateMillis: Long) {
+        val part = warrantyPartDao.getPartById(partId) ?: return
         val computedExpiry = DateUtils.calculateExpiryDate(
             startDateMillis = newStartDateMillis,
-            warrantyValue = item.warrantyValue,
-            warrantyUnit = item.warrantyUnit
-        )
-        val updated = item.copy(
-            warrantyStartDate = newStartDateMillis,
+            warrantyValue = part.durationValue,
+            warrantyUnit = part.durationUnit
+        ) ?: newStartDateMillis
+        val updated = part.copy(
+            startDate = newStartDateMillis,
             expiryDate = computedExpiry,
             updatedAt = System.currentTimeMillis()
         )
-        itemDao.updateItem(updated)
-        rescheduleReminders(itemId = itemId, expiryDate = computedExpiry)
+        warrantyPartDao.updateWarrantyPart(updated)
+
+        // Reschedule reminders for this part
+        reminderDao.deleteRemindersForPart(partId)
+        val now = System.currentTimeMillis()
+        val reminderPairs = DateUtils.calculateReminderDates(computedExpiry)
+        val reminders = reminderPairs.map { (daysBefore, reminderDate) ->
+            Reminder(
+                itemId = part.itemId,
+                partId = part.id,
+                reminderDate = reminderDate,
+                daysBefore = daysBefore,
+                isSent = reminderDate < now
+            )
+        }
+        if (reminders.isNotEmpty()) {
+            reminderDao.insertReminders(reminders)
+        }
+    }
+
+    suspend fun updateWarrantyStartDate(itemId: Long, newStartDateMillis: Long) {
+        val parts = warrantyPartDao.getWarrantyPartsForItemOnce(itemId)
+        val firstPart = parts.firstOrNull()
+        if (firstPart != null) {
+            updateWarrantyPartStartDate(firstPart.id, newStartDateMillis)
+        }
     }
 }
